@@ -35,7 +35,7 @@ workflows:
           echo "=== Listing artifacts folder ==="
           ls -al artifacts || true
 
-      - name: Optional: make a direct download URL (transfer.sh)
+      - name: "Optional: make a direct download URL (transfer.sh)"
         script: |
           set +e
           if [ -f artifacts/Runner.ipa ]; then
