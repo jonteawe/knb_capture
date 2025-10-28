@@ -14,3 +14,9 @@ workflows:
           flutter build ipa --release --no-codesign
     artifacts:
       - build/ios/ipa/*.ipa
+      - build/ios/iphoneos/*.app
+      - flutter_export_environment.sh
+    publishing:
+      email:
+        recipients:
+          - jonteawe@gmail.com
