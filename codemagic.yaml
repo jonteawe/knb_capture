@@ -11,40 +11,43 @@ workflows:
         script: |
           flutter pub get
 
-      - name: Build iOS IPA
+      - name: Build iOS project (no codesign)
         script: |
-          flutter build ipa --release --no-codesign
+          flutter build ios --release --no-codesign
 
-      - name: Collect IPA into ./artifacts
+      - name: Export IPA manually using Xcode
         script: |
           set -e
-          echo "=== Searching for any .ipa file ==="
-          FOUND_IPA="$(find "$PWD" -type f -name "*.ipa" | head -n 1 || true)"
-          echo "FOUND_IPA=$FOUND_IPA"
+          echo "=== Exporting IPA manually ==="
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          APP_NAME=$(find . -maxdepth 1 -type d -name "*.app" | head -n 1)
+          echo "Found app: $APP_NAME"
+          cp -r "$APP_NAME" Payload/
+          zip -r ../../Runner.ipa Payload
+          cd ../../..
+          echo "Created Runner.ipa at build/Runner.ipa"
+
+      - name: Collect IPA into artifacts
+        script: |
           mkdir -p artifacts
-          if [ -n "$FOUND_IPA" ]; then
-            cp "$FOUND_IPA" artifacts/Runner.ipa
-            echo "Copied IPA to artifacts/Runner.ipa"
+          if [ -f build/Runner.ipa ]; then
+            cp build/Runner.ipa artifacts/
+            echo "Copied Runner.ipa to artifacts/"
           else
-            echo "No .ipa found, zipping iOS build output as fallback"
-            (cd build/ios && zip -r ../ios_build_output.zip . || true)
-            if [ -f build/ios_build_output.zip ]; then
-              mv build/ios_build_output.zip artifacts/
-            fi
+            echo "No IPA found, zipping iOS folder as fallback."
+            (cd build/ios && zip -r ../ios_build_output.zip .)
+            mv build/ios_build_output.zip artifacts/
           fi
-          echo "=== Listing artifacts folder ==="
-          ls -al artifacts || true
+          ls -al artifacts
 
       - name: "Optional: make a direct download URL (transfer.sh)"
         script: |
-          set +e
           if [ -f artifacts/Runner.ipa ]; then
-            echo "Uploading artifacts/Runner.ipa to transfer.sh..."
+            echo "Uploading Runner.ipa to transfer.sh..."
             URL=$(curl -s --upload-file artifacts/Runner.ipa https://transfer.sh/Runner.ipa)
-            echo "Direct download (valid for ~14 days):"
+            echo "Direct download (valid ~14 days):"
             echo "$URL"
-          else
-            echo "No Runner.ipa to upload."
           fi
 
     artifacts:
