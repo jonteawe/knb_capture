@@ -12,11 +12,16 @@ workflows:
       - name: Build iOS IPA
         script: |
           flutter build ipa --release --no-codesign
+      - name: List build outputs (for debugging)
+        script: |
+          echo "=== List of build/ios folder ==="
+          find build/ios -type f
     artifacts:
       - build/ios/ipa/*.ipa
+      - build/ios/iphoneos/*.ipa
       - build/ios/iphoneos/*.app
-      - flutter_export_environment.sh
+      - build/ios/**/*.ipa
     publishing:
       email:
         recipients:
-          - jonteawe@gmail.com
+        - jonteawe@gmail.com
