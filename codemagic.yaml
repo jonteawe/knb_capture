@@ -5,23 +5,27 @@ workflows:
       flutter: stable
       xcode: latest
       cocoapods: default
+
     scripts:
       - name: Install dependencies
         script: |
           flutter pub get
+
       - name: Build iOS IPA
         script: |
           flutter build ipa --release --no-codesign
+
       - name: Find IPA file
         script: |
           echo "=== Searching for .ipa files in build folder ==="
           find . -type f -name "*.ipa"
           echo "=== Listing all iOS output folders ==="
           ls -R build/ios
+
     artifacts:
-      - **/*.ipa
-      - build/ios/**/*.ipa
-      - build/ios/iphoneos/*.app
+      - "build/ios/**/*.ipa"
+      - "build/ios/iphoneos/*.app"
+
     publishing:
       email:
         recipients:
