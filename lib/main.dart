@@ -48,7 +48,7 @@ class _CameraScreenState extends State<CameraScreen> {
   List<Color> _capturedColors = [];
   List<Offset> _positions = [];
   List<Offset> _capturedPositions = [];
-  List<Offset> _velocities = []; // rörelsevektorer
+  List<Offset> _velocities = [];
 
   final int _sampleCount = 5;
   final Random _rand = Random();
@@ -67,7 +67,6 @@ class _CameraScreenState extends State<CameraScreen> {
 
     try {
       final camera = widget.cameras.first;
-
       _controller = CameraController(
         camera,
         ResolutionPreset.medium,
@@ -84,7 +83,7 @@ class _CameraScreenState extends State<CameraScreen> {
       setState(() => _isInitialized = true);
       debugPrint("✅ Kamera initierad och aktiv.");
 
-      _updateTimer = Timer.periodic(const Duration(milliseconds: 150), (_) {
+      _updateTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
         if (mounted && !_isFrozen) setState(() {});
       });
     } catch (e) {
@@ -92,8 +91,14 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  double _colorDiff(Color a, Color b) {
+    return ((a.red - b.red).abs() +
+            (a.green - b.green).abs() +
+            (a.blue - b.blue).abs()) /
+        3.0;
+  }
+
   double _colorIntensity(int r, int g, int b) {
-    // Låg intensitet = mörkt/grått, hög = stark färg
     final double brightness = (r + g + b) / 3.0;
     final double saturation = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
     return (saturation * 1.2 + (255 - (brightness - 127.5).abs())) / 510.0;
@@ -106,14 +111,16 @@ class _CameraScreenState extends State<CameraScreen> {
       final width = image.width;
       final height = image.height;
 
-      // initiera positioner och hastigheter
+      // initiera positioner & hastigheter
       if (_positions.isEmpty) {
         for (int i = 0; i < _sampleCount; i++) {
-          _positions.add(Offset(0.2 + 0.15 * i, 0.5));
+          _positions.add(Offset(0.25 + 0.1 * i, 0.5));
           _velocities.add(Offset.zero);
           _colors.add(Colors.transparent);
         }
       }
+
+      List<Color> newColors = List.from(_colors);
 
       for (int i = 0; i < _positions.length; i++) {
         final pos = _positions[i];
@@ -125,31 +132,51 @@ class _CameraScreenState extends State<CameraScreen> {
         final b = bytes[idx];
         final g = bytes[idx + 1];
         final r = bytes[idx + 2];
+        final color = Color.fromARGB(255, r, g, b);
+        newColors[i] = color;
 
-        double score = _colorIntensity(r, g, b);
-        double moveChance = 1.0 - score; // ju bättre färg, desto mindre rörelse
+        // mäta färgkvalitet
+        double quality = _colorIntensity(r, g, b);
 
-        // slumpmässig rörelse ibland (lite "organiskt beteende")
-        if (_rand.nextDouble() < moveChance * 0.6) {
-          double dx = (_rand.nextDouble() - 0.5) * 0.05; // små steg
+        // undvik att likna andra färger för mycket
+        double similarityPenalty = 0;
+        for (int j = 0; j < _colors.length; j++) {
+          if (j == i) continue;
+          double diff = _colorDiff(color, _colors[j]);
+          similarityPenalty += (diff < 40 ? (1 - diff / 40) : 0);
+        }
+
+        double interest = (quality - similarityPenalty * 0.5).clamp(0, 1);
+
+        // Ju sämre kvalitet → större chans att flytta
+        if (_rand.nextDouble() > interest) {
+          double dx = (_rand.nextDouble() - 0.5) * 0.05;
           double dy = (_rand.nextDouble() - 0.5) * 0.05;
+
+          // Lägg till liten slumpmässig "impuls"
           _velocities[i] = Offset(
-            (_velocities[i].dx + dx) * 0.5,
-            (_velocities[i].dy + dy) * 0.5,
+            (_velocities[i].dx + dx) * 0.7,
+            (_velocities[i].dy + dy) * 0.7,
           );
         } else {
-          // stanna nästan still ibland
+          // Annars sakta ner rörelsen
           _velocities[i] = _velocities[i] * 0.8;
         }
 
+        // Ny smidig position
         Offset newPos = Offset(
           (pos.dx + _velocities[i].dx).clamp(0.05, 0.95),
           (pos.dy + _velocities[i].dy).clamp(0.05, 0.95),
         );
 
-        _positions[i] = newPos;
-        _colors[i] = Color.fromARGB(255, r, g, b);
+        // Smooth lerp
+        _positions[i] = Offset(
+          pos.dx + (newPos.dx - pos.dx) * 0.3,
+          pos.dy + (newPos.dy - pos.dy) * 0.3,
+        );
       }
+
+      _colors = newColors;
     }
   }
 
@@ -160,7 +187,6 @@ class _CameraScreenState extends State<CameraScreen> {
       _capturedPositions = List.from(_positions);
       _isFrozen = true;
     });
-
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("📸 Färger fångade!")),
     );
@@ -195,7 +221,7 @@ class _CameraScreenState extends State<CameraScreen> {
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-          // dynamiska cirklar
+          // Dynamiska färgikoner
           if (_isInitialized)
             LayoutBuilder(
               builder: (context, constraints) {
@@ -209,7 +235,7 @@ class _CameraScreenState extends State<CameraScreen> {
                       left: dx - 25,
                       top: dy - 25,
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 250),
+                        duration: const Duration(milliseconds: 100),
                         width: 50,
                         height: 50,
                         decoration: BoxDecoration(
@@ -230,7 +256,7 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
 
-          // knappar
+          // UI-knappar
           Positioned(
             bottom: 20,
             left: 0,
@@ -249,9 +275,11 @@ class _CameraScreenState extends State<CameraScreen> {
                       borderRadius: BorderRadius.circular(30),
                     ),
                   ),
-                  child: const Text("Capture Colors",
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    "Capture Colors",
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
                 ),
                 const SizedBox(width: 20),
                 if (_isFrozen)
