@@ -72,7 +72,6 @@ class _CameraScreenState extends State<CameraScreen> {
           sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
       _gyroMotion = (_gyroMotion * 0.9) + (magnitude * 0.1);
 
-      // Om kameran börjar röra sig -> starta igen
       if (_gyroMotion > 0.15 && _autoPause) {
         _autoPause = false;
         debugPrint("🔓 Rörelse upptäckt – scanning återupptas");
@@ -188,7 +187,6 @@ class _CameraScreenState extends State<CameraScreen> {
 
       double avgChange = totalChange / _colors.length;
 
-      // Pausa efter ~3 sek av stillhet
       if (avgChange < 0.02 && _gyroMotion < 0.05) {
         _stillTimer += 0.1;
         if (_stillTimer > 3.0) {
@@ -228,7 +226,6 @@ class _CameraScreenState extends State<CameraScreen> {
         _capturedPositions = List.from(_positions);
         _isCaptured = true;
       });
-
       debugPrint("📸 Stillbild tagen och färger låsta");
     } catch (e) {
       debugPrint("❌ Kunde inte ta bild: $e");
@@ -260,107 +257,130 @@ class _CameraScreenState extends State<CameraScreen> {
       onTap: _toggleManualPause,
       child: Scaffold(
         backgroundColor: Colors.black,
-        body: Stack(
+        body: Column(
           children: [
-            // Kamera eller stillbild
-            if (_isCaptured && _capturedImage != null)
-              Center(
-                child: CustomPaint(
-                  painter: _ImagePainter(_capturedImage!),
-                  child: Container(),
-                ),
-              )
-            else if (_isInitialized)
-              FractionallySizedBox(
-                heightFactor: cameraVisibleFraction,
-                alignment: Alignment.topCenter,
-                child: CameraPreview(_controller!),
-              )
-            else
-              const Center(child: CircularProgressIndicator(color: Colors.white)),
-
-            // Färgbubblor
-            if (_isInitialized || _isCaptured)
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  return Stack(
-                    children: List.generate(colorsToShow.length, (i) {
-                      if (i >= positionsToShow.length) return const SizedBox();
-                      final pos = positionsToShow[i];
-                      final dx = pos.dx * constraints.maxWidth;
-                      final dy =
-                          pos.dy * constraints.maxHeight * cameraVisibleFraction;
-                      return Positioned(
-                        left: dx - 25,
-                        top: dy - 25,
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 33),
-                          width: 50,
-                          height: 50,
-                          decoration: BoxDecoration(
-                            color: colorsToShow[i],
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 2),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.4),
-                                blurRadius: 6,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }),
-                  );
-                },
-              ),
-
-            // UI under kameran
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Container(
-                height:
-                    MediaQuery.of(context).size.height * (1 - cameraVisibleFraction),
-                color: Colors.black,
-                padding: const EdgeInsets.only(bottom: 40),
-                child: Center(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      ElevatedButton(
-                        onPressed: _isCaptured ? null : _captureColors,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.black,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 30, vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                        ),
-                        child: const Text(
-                          "Capture Colors",
-                          style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
+            // 📸 Kamera-del (80%)
+            Expanded(
+              flex: 8,
+              child: Stack(
+                children: [
+                  if (_isCaptured && _capturedImage != null)
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _ImagePainter(_capturedImage!),
                       ),
-                      const SizedBox(width: 20),
-                      if (_isCaptured)
+                    )
+                  else if (_isInitialized)
+                    Positioned.fill(
+                      child: CameraPreview(_controller!),
+                    )
+                  else
+                    const Center(
+                        child: CircularProgressIndicator(color: Colors.white)),
+
+                  if (_isInitialized || _isCaptured)
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        return Stack(
+                          children: List.generate(colorsToShow.length, (i) {
+                            if (i >= positionsToShow.length) return const SizedBox();
+                            final pos = positionsToShow[i];
+                            final dx = pos.dx * constraints.maxWidth;
+                            final dy = pos.dy * constraints.maxHeight;
+                            return Positioned(
+                              left: dx.clamp(0, constraints.maxWidth - 50),
+                              top: dy.clamp(0, constraints.maxHeight - 50),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 33),
+                                width: 50,
+                                height: 50,
+                                decoration: BoxDecoration(
+                                  color: colorsToShow[i],
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white, width: 2),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.4),
+                                      blurRadius: 6,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                        );
+                      },
+                    ),
+                ],
+              ),
+            ),
+
+            // 🎨 UI-del (20%)
+            Expanded(
+              flex: 2,
+              child: Container(
+                color: Colors.black,
+                padding: const EdgeInsets.only(bottom: 25),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    // Färgpalett
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: _colors
+                          .map(
+                            (c) => Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 6),
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: c,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 2),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    // Knappar
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
                         ElevatedButton(
-                          onPressed: _resetCapture,
+                          onPressed: _isCaptured ? null : _captureColors,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.grey[300],
+                            backgroundColor: Colors.white,
                             foregroundColor: Colors.black,
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 20, vertical: 14),
+                                horizontal: 30, vertical: 14),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(30),
                             ),
                           ),
-                          child: const Text("Reset"),
+                          child: const Text(
+                            "Capture Colors",
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
                         ),
-                    ],
-                  ),
+                        const SizedBox(width: 20),
+                        if (_isCaptured)
+                          ElevatedButton(
+                            onPressed: _resetCapture,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.grey[300],
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 20, vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                            ),
+                            child: const Text("Reset"),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
