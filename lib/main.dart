@@ -4,6 +4,34 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  List<CameraDescription> cameras = [];
+  try {
+    cameras = await availableCameras();
+  } catch (e) {
+    debugPrint("⚠️ Kunde inte hitta kameror: $e");
+  }
+
+  runApp(MyApp(cameras: cameras));
+}
+
+class MyApp extends StatelessWidget {
+  final List<CameraDescription> cameras;
+  const MyApp({super.key, required this.cameras});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: "Knb Capture",
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark(),
+      home: CameraScreen(cameras: cameras),
+    );
+  }
+}
+
 class CameraScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
   const CameraScreen({super.key, required this.cameras});
@@ -12,46 +40,22 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver {
+class _CameraScreenState extends State<CameraScreen> {
   CameraController? _controller;
   bool _isInitialized = false;
-  bool _isBusy = false;
-  bool _isAppPaused = false;
-  Timer? _uiUpdateTimer;
+  Timer? _colorTimer;
   List<Color> _colors = List.generate(5, (_) => Colors.transparent);
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _initializeCamera();
   }
 
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _uiUpdateTimer?.cancel();
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // iOS kräver att kameran stoppas när appen pausas
-    if (_controller == null || !_controller!.value.isInitialized) return;
-
-    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
-      _isAppPaused = true;
-      _controller?.dispose();
-    } else if (state == AppLifecycleState.resumed && _isAppPaused) {
-      _isAppPaused = false;
-      _initializeCamera();
-    }
-  }
-
   Future<void> _initializeCamera() async {
-    if (!Platform.isIOS) {
-      debugPrint("❌ iOS krävs för denna version.");
+    // Endast iOS eller Android stöds
+    if (!(Platform.isIOS || Platform.isAndroid)) {
+      debugPrint("❌ Kamera stöds ej på denna plattform.");
       return;
     }
 
@@ -60,140 +64,115 @@ class _CameraScreenState extends State<CameraScreen> with WidgetsBindingObserver
 
       _controller = CameraController(
         camera,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.bgra8888, // ✅ nödvändigt på iOS
+        imageFormatGroup: Platform.isIOS
+            ? ImageFormatGroup.bgra8888 // iOS kräver BGRA8888
+            : ImageFormatGroup.yuv420, // Android-standard
       );
 
-      // initiera kameran med timeout
-      await _controller!.initialize().timeout(const Duration(seconds: 5));
+      await _controller!.initialize();
+      // iOS fix: kort delay efter init
+      await Future.delayed(const Duration(milliseconds: 200));
 
-      if (!mounted) return;
-      setState(() => _isInitialized = true);
-
-      debugPrint("✅ Kamera initierad på iOS");
-
-      // starta bildström
       await _controller!.startImageStream(_processFrame);
 
-      // uppdatera UI var 0.25 sekund
-      _uiUpdateTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
-        if (mounted && !_isBusy) setState(() {});
-      });
+      setState(() => _isInitialized = true);
+      debugPrint("✅ Kamera initierad och aktiv.");
+
+      // uppdatera UI var 0.25 sek
+      _colorTimer =
+          Timer.periodic(const Duration(milliseconds: 250), (_) => setState(() {}));
     } catch (e) {
       debugPrint("❌ Fel vid kamera-initiering: $e");
-      _showCameraErrorDialog(e.toString());
     }
   }
 
   void _processFrame(CameraImage image) {
-    if (_isBusy) return;
-    _isBusy = true;
-
-    try {
-      final rand = Random();
-      _colors = List.generate(
-        5,
-        (_) => Color.fromRGBO(
-          rand.nextInt(255),
-          rand.nextInt(255),
-          rand.nextInt(255),
-          1.0,
-        ),
-      );
-    } catch (e) {
-      debugPrint("⚠️ Fel vid frame-analys: $e");
-    } finally {
-      _isBusy = false;
-    }
-  }
-
-  void _showCameraErrorDialog(String message) {
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Kamera-fel"),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("OK"),
-          )
-        ],
+    // Enkel simulering av färg-analys (Adobe-Capture-stil)
+    final rand = Random();
+    _colors = List.generate(
+      5,
+      (_) => Color.fromRGBO(
+        rand.nextInt(255),
+        rand.nextInt(255),
+        rand.nextInt(255),
+        1.0,
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _colorTimer?.cancel();
+    _controller?.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            if (_isInitialized && _controller != null)
-              CameraPreview(_controller!)
-            else
-              const Center(
-                child: CircularProgressIndicator(color: Colors.white),
-              ),
+      body: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Kamera-preview
+          if (_isInitialized)
+            CameraPreview(_controller!)
+          else
+            const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-            // Overlay med fem färgbubblor
-            Positioned(
-              bottom: 90,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: _colors
-                    .map(
-                      (c) => Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 6),
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: c,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.4),
-                              blurRadius: 6,
-                            )
-                          ],
-                        ),
+          // Färg-bubblor (overlay)
+          Positioned(
+            bottom: 90,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: _colors
+                  .map(
+                    (c) => Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 6),
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: c,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.4),
+                            blurRadius: 6,
+                          ),
+                        ],
                       ),
-                    )
-                    .toList(),
-              ),
+                    ),
+                  )
+                  .toList(),
             ),
+          ),
 
-            // Capture-knapp
-            Positioned(
-              bottom: 20,
-              child: ElevatedButton(
-                onPressed: () {
-                  debugPrint("📸 Tar färgdata (placeholder just nu)");
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(32),
-                  ),
-                ),
-                child: const Text(
-                  "Capture Colors",
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+          // Capture-knapp
+          Positioned(
+            bottom: 20,
+            child: ElevatedButton(
+              onPressed: () {
+                debugPrint("📸 Färger fångade (logik läggs till senare).");
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 30, vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
                 ),
               ),
+              child: const Text(
+                "Capture Colors",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
