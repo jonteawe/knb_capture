@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'dart:typed_data';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,20 +43,15 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   CameraController? _controller;
   bool _isInitialized = false;
-  bool _isFrozen = false; // Fryser färger efter capture
+  bool _isFrozen = false;
   Timer? _updateTimer;
 
-  // Positioner (relativa koordinater i kamerabilden)
-  final List<Offset> _samplePositions = [
-    const Offset(0.3, 0.4),
-    const Offset(0.5, 0.4),
-    const Offset(0.7, 0.4),
-    const Offset(0.4, 0.6),
-    const Offset(0.6, 0.6),
-  ];
-
-  List<Color> _colors = List.generate(5, (_) => Colors.transparent);
+  List<Color> _colors = [];
   List<Color> _capturedColors = [];
+  List<Offset> _positions = []; // Bildpositioner för varje färg
+  List<Offset> _capturedPositions = []; // Sparade positioner efter capture
+
+  final int _sampleCount = 5; // Antal färgprover
 
   @override
   void initState() {
@@ -90,7 +84,6 @@ class _CameraScreenState extends State<CameraScreen> {
       setState(() => _isInitialized = true);
       debugPrint("✅ Kamera initierad och aktiv.");
 
-      // uppdatera var 0.1 sek
       _updateTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
         if (mounted && !_isFrozen) setState(() {});
       });
@@ -105,33 +98,39 @@ class _CameraScreenState extends State<CameraScreen> {
       final bytes = image.planes.first.bytes;
       final width = image.width;
       final height = image.height;
+      final rand = Random();
 
-      List<Color> extracted = [];
-      for (var pos in _samplePositions) {
-        int x = (pos.dx * width).toInt();
-        int y = (pos.dy * height).toInt();
+      List<Color> extractedColors = [];
+      List<Offset> extractedPositions = [];
+
+      for (int i = 0; i < _sampleCount; i++) {
+        // Slumpa punkt i bildens koordinater
+        int x = rand.nextInt(width);
+        int y = rand.nextInt(height);
         int pixelIndex = (y * width + x) * 4;
 
         if (pixelIndex + 3 < bytes.length) {
           final b = bytes[pixelIndex];
           final g = bytes[pixelIndex + 1];
           final r = bytes[pixelIndex + 2];
-          extracted.add(Color.fromARGB(255, r, g, b));
-        } else {
-          extracted.add(Colors.grey);
+          extractedColors.add(Color.fromARGB(255, r, g, b));
+
+          // Spara relativ position (0–1)
+          extractedPositions.add(Offset(x / width, y / height));
         }
       }
 
-      _colors = extracted;
+      _colors = extractedColors;
+      _positions = extractedPositions;
     }
   }
 
   Future<void> _captureColors() async {
     if (!_isInitialized) return;
 
-    // Frys nuvarande färger
     setState(() {
       _capturedColors = List.from(_colors);
+      _capturedPositions = List.from(_positions);
       _isFrozen = true;
     });
 
@@ -149,6 +148,7 @@ class _CameraScreenState extends State<CameraScreen> {
     setState(() {
       _isFrozen = false;
       _capturedColors.clear();
+      _capturedPositions.clear();
     });
   }
 
@@ -162,27 +162,30 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   Widget build(BuildContext context) {
     final colorsToShow = _isFrozen ? _capturedColors : _colors;
+    final positionsToShow = _isFrozen ? _capturedPositions : _positions;
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
-        alignment: Alignment.center,
         children: [
           if (_isInitialized)
             CameraPreview(_controller!)
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-          // Färgikoner ovanpå kamerabilden på sina positioner
+          // Dynamiska färgikoner
           if (_isInitialized)
             LayoutBuilder(
               builder: (context, constraints) {
                 return Stack(
                   children: List.generate(colorsToShow.length, (i) {
-                    final pos = _samplePositions[i];
+                    final pos = positionsToShow[i];
+                    final dx = pos.dx * constraints.maxWidth;
+                    final dy = pos.dy * constraints.maxHeight;
+
                     return Positioned(
-                      left: constraints.maxWidth * pos.dx - 25,
-                      top: constraints.maxHeight * pos.dy - 25,
+                      left: dx - 25,
+                      top: dy - 25,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 100),
                         width: 50,
@@ -205,9 +208,11 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
 
-          // Capture & Reset-knappar
+          // Capture & Reset
           Positioned(
             bottom: 20,
+            left: 0,
+            right: 0,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -224,8 +229,7 @@ class _CameraScreenState extends State<CameraScreen> {
                   ),
                   child: const Text(
                     "Capture Colors",
-                    style:
-                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                 ),
                 const SizedBox(width: 20),
