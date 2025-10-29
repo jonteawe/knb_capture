@@ -40,7 +40,7 @@ class _CameraScreenState extends State<CameraScreen> {
   bool _isFrozen = false;
   int _frameCounter = 0;
 
-  List<Color> _colors = [];
+  List<Color> _colors = List.filled(5, Colors.black);
   List<Offset> _positions = [];
   List<Color> _capturedColors = [];
   List<Offset> _capturedPositions = [];
@@ -83,11 +83,18 @@ class _CameraScreenState extends State<CameraScreen> {
         441.67;
   }
 
+  // 🧠 Updated: Handles dark tones better and boosts subtle contrast
   double _colorInterest(int r, int g, int b) {
     final double brightness = (r + g + b) / 3.0;
     final double contrast = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
     final double saturation = contrast / (brightness + 1);
-    return (contrast * 1.3 + saturation * 100 + (255 - (brightness - 128).abs())) / 510.0;
+
+    // Boost contrast if image is dark
+    double lowLightBoost = 1 + ((255 - brightness) / 200);
+    double score = (contrast * 1.2 + saturation * 90) * lowLightBoost;
+
+    // Normalize, prevent too low values in total black
+    return (score / 300).clamp(0.0, 1.0);
   }
 
   void _processFrame(CameraImage image) {
@@ -108,7 +115,6 @@ class _CameraScreenState extends State<CameraScreen> {
       if (_positions.isEmpty) {
         for (int i = 0; i < _sampleCount; i++) {
           _positions.add(Offset(0.2 + i * 0.15, 0.5));
-          _colors.add(Colors.transparent);
         }
       }
 
@@ -152,12 +158,13 @@ class _CameraScreenState extends State<CameraScreen> {
             int r = (rSum / count).toInt();
             int g = (gSum / count).toInt();
             int b = (bSum / count).toInt();
+
             double score = _colorInterest(r, g, b);
             final c = Color.fromARGB(255, r, g, b);
 
             for (int j = 0; j < _colors.length; j++) {
               if (j == i) continue;
-              score -= max(0, 0.3 - _colorDistance(c, _colors[j])) * 1.5;
+              score -= max(0, 0.2 - _colorDistance(c, _colors[j])) * 1.5;
             }
 
             if (score > bestScore) {
@@ -175,7 +182,7 @@ class _CameraScreenState extends State<CameraScreen> {
           pos.dx + (target.dx - pos.dx) * snapSpeed,
           pos.dy + (target.dy - pos.dy) * snapSpeed,
         );
-        newColors[i] = Color.lerp(_colors[i], bestColor, 0.9)!;
+        newColors[i] = Color.lerp(_colors[i], bestColor, 0.8)!;
       }
 
       _positions = newPositions;
@@ -231,7 +238,7 @@ class _CameraScreenState extends State<CameraScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // 📷 Camera preview
+          // Camera preview or frozen image
           if (_isInitialized)
             FractionallySizedBox(
               heightFactor: cameraVisibleFraction,
@@ -243,32 +250,31 @@ class _CameraScreenState extends State<CameraScreen> {
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-          // 🎨 Color Palette Top Bar
+          // Top color palette bar (always visible)
           SafeArea(
-            child: Container(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 100),
               height: 80,
               color: Colors.black.withOpacity(0.85),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: ( _isFrozen ? _capturedColors : _colors )
-                    .map(
-                      (c) => AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        width: 60,
-                        height: 60,
-                        decoration: BoxDecoration(
-                          color: c,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.white, width: 2),
-                        ),
-                      ),
-                    )
-                    .toList(),
+                children: colorsToShow.map((c) {
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: c,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                  );
+                }).toList(),
               ),
             ),
           ),
 
-          // 🎯 Color dots on camera
+          // Moving color dots on camera
           if (_isInitialized)
             LayoutBuilder(
               builder: (context, constraints) {
@@ -282,7 +288,7 @@ class _CameraScreenState extends State<CameraScreen> {
                       left: dx - 25,
                       top: dy - 25,
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 20),
+                        duration: const Duration(milliseconds: 50),
                         width: 50,
                         height: 50,
                         decoration: BoxDecoration(
@@ -303,7 +309,7 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
 
-          // 🎛 Bottom UI (buttons)
+          // Bottom buttons
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
