@@ -39,15 +39,11 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   CameraController? _controller;
   bool _isInitialized = false;
+  bool _isCaptured = false;
   bool _manualPause = false;
   bool _autoPause = false;
-  bool _isCaptured = false;
 
   ui.Image? _capturedImage;
-  double _stillTimer = 0;
-  double _gyroMotion = 0;
-
-  StreamSubscription? _gyroSub;
 
   List<Color> _colors = [];
   List<Offset> _positions = [];
@@ -58,6 +54,11 @@ class _CameraScreenState extends State<CameraScreen> {
   final Random _rand = Random();
   final double cameraVisibleFraction = 0.80;
 
+  // Gyro & stillhet
+  double _gyroMotion = 0;
+  double _stillTimer = 0;
+  StreamSubscription? _gyroSub;
+
   @override
   void initState() {
     super.initState();
@@ -67,14 +68,14 @@ class _CameraScreenState extends State<CameraScreen> {
 
   void _listenGyro() {
     _gyroSub = gyroscopeEvents.listen((GyroscopeEvent event) {
-      // summera rörelseenergi
-      final magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
+      final magnitude =
+          sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
       _gyroMotion = (_gyroMotion * 0.9) + (magnitude * 0.1);
 
-      // om kameran rör sig rejält -> lås upp
+      // Om kameran börjar röra sig -> starta igen
       if (_gyroMotion > 0.15 && _autoPause) {
         _autoPause = false;
-        debugPrint("🔓 Rörelse upptäckt via gyro — scanning återupptas");
+        debugPrint("🔓 Rörelse upptäckt – scanning återupptas");
       }
     });
   }
@@ -117,7 +118,6 @@ class _CameraScreenState extends State<CameraScreen> {
 
   void _processFrame(CameraImage image) {
     if (_manualPause || _autoPause || _isCaptured) return;
-
     if (Platform.isIOS && image.format.group == ImageFormatGroup.bgra8888) {
       final bytes = image.planes.first.bytes;
       final width = image.width;
@@ -125,45 +125,84 @@ class _CameraScreenState extends State<CameraScreen> {
 
       if (_positions.isEmpty) {
         for (int i = 0; i < _sampleCount; i++) {
-          _positions.add(Offset(0.2 + i * 0.15, 0.5));
+          _positions.add(Offset(_rand.nextDouble(), _rand.nextDouble() * 0.8));
           _colors.add(Colors.transparent);
         }
       }
 
       final List<Color> newColors = List.from(_colors);
+      final List<Offset> newPositions = List.from(_positions);
+
       double totalChange = 0;
 
       for (int i = 0; i < _positions.length; i++) {
         final pos = _positions[i];
         int cx = (pos.dx * width).toInt();
         int cy = (pos.dy * height).toInt();
-        int idx = (cy * width + cx) * 4;
-        if (idx + 3 >= bytes.length) continue;
+        cx = cx.clamp(0, width - 1);
+        cy = cy.clamp(0, height - 1);
 
-        final b = bytes[idx];
-        final g = bytes[idx + 1];
-        final r = bytes[idx + 2];
-        final c = Color.fromARGB(255, r, g, b);
+        double bestScore = 0;
+        int bestX = cx;
+        int bestY = cy;
+        Color bestColor = _colors[i];
 
-        totalChange += _colorDistance(_colors[i], c);
-        newColors[i] = Color.lerp(_colors[i], c, 0.6)!;
+        for (int dx = -20; dx <= 20; dx += 5) {
+          for (int dy = -20; dy <= 20; dy += 5) {
+            int nx = (cx + dx).clamp(0, width - 1);
+            int ny = (cy + dy).clamp(0, height - 1);
+            int idx = (ny * width + nx) * 4;
+            if (idx + 3 >= bytes.length) continue;
+
+            final b = bytes[idx];
+            final g = bytes[idx + 1];
+            final r = bytes[idx + 2];
+            double score = _colorInterest(r, g, b);
+
+            final c = Color.fromARGB(255, r, g, b);
+
+            for (int j = 0; j < _colors.length; j++) {
+              if (j == i) continue;
+              score -= max(0, 0.3 - _colorDistance(c, _colors[j])) * 1.5;
+            }
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestX = nx;
+              bestY = ny;
+              bestColor = c;
+            }
+          }
+        }
+
+        double snapSpeed = min(1.0, max(0.6, bestScore));
+        Offset target = Offset(bestX / width, bestY / height);
+        newPositions[i] = Offset(
+          pos.dx + (target.dx - pos.dx) * snapSpeed,
+          pos.dy + (target.dy - pos.dy) * snapSpeed,
+        );
+        newColors[i] = Color.lerp(_colors[i], bestColor, 0.8)!;
+
+        totalChange += _colorDistance(_colors[i], newColors[i]);
       }
 
       double avgChange = totalChange / _colors.length;
 
-      // stillhetslogik baserad på färgförändring
+      // Pausa efter ~3 sek av stillhet
       if (avgChange < 0.02 && _gyroMotion < 0.05) {
         _stillTimer += 0.1;
         if (_stillTimer > 3.0) {
           _autoPause = true;
           _stillTimer = 0;
-          debugPrint("⏸ Auto-pause (stillhet & ingen rörelse)");
+          debugPrint("⏸ Auto-paus (kameran stilla)");
         }
       } else {
         _stillTimer = 0;
       }
 
+      _positions = newPositions;
       _colors = newColors;
+
       if (mounted) setState(() {});
     }
   }
@@ -189,7 +228,8 @@ class _CameraScreenState extends State<CameraScreen> {
         _capturedPositions = List.from(_positions);
         _isCaptured = true;
       });
-      debugPrint("📸 Stillbild tagen och färger fångade");
+
+      debugPrint("📸 Stillbild tagen och färger låsta");
     } catch (e) {
       debugPrint("❌ Kunde inte ta bild: $e");
     }
@@ -222,7 +262,7 @@ class _CameraScreenState extends State<CameraScreen> {
         backgroundColor: Colors.black,
         body: Stack(
           children: [
-            // Visa stillbild om tagen annars live
+            // Kamera eller stillbild
             if (_isCaptured && _capturedImage != null)
               Center(
                 child: CustomPaint(
@@ -239,7 +279,7 @@ class _CameraScreenState extends State<CameraScreen> {
             else
               const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-            // färgprickar
+            // Färgbubblor
             if (_isInitialized || _isCaptured)
               LayoutBuilder(
                 builder: (context, constraints) {
@@ -254,7 +294,7 @@ class _CameraScreenState extends State<CameraScreen> {
                         left: dx - 25,
                         top: dy - 25,
                         child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 25),
+                          duration: const Duration(milliseconds: 33),
                           width: 50,
                           height: 50,
                           decoration: BoxDecoration(
@@ -275,7 +315,7 @@ class _CameraScreenState extends State<CameraScreen> {
                 },
               ),
 
-            // UI-knappar under kameran
+            // UI under kameran
             Align(
               alignment: Alignment.bottomCenter,
               child: Container(
