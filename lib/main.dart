@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'dart:ui' as ui;
+import 'dart:typed_data';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,11 +44,20 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   CameraController? _controller;
   bool _isInitialized = false;
-  Timer? _colorTimer;
-  List<Color> _colors = List.generate(5, (_) => Colors.transparent);
+  bool _isFrozen = false; // Fryser färger efter capture
+  Timer? _updateTimer;
 
-  bool _captureRequested = false;
-  List<Color> _lastCapturedColors = [];
+  // Positioner (relativa koordinater i kamerabilden)
+  final List<Offset> _samplePositions = [
+    const Offset(0.3, 0.4),
+    const Offset(0.5, 0.4),
+    const Offset(0.7, 0.4),
+    const Offset(0.4, 0.6),
+    const Offset(0.6, 0.6),
+  ];
+
+  List<Color> _colors = List.generate(5, (_) => Colors.transparent);
+  List<Color> _capturedColors = [];
 
   @override
   void initState() {
@@ -82,66 +90,79 @@ class _CameraScreenState extends State<CameraScreen> {
       setState(() => _isInitialized = true);
       debugPrint("✅ Kamera initierad och aktiv.");
 
-      _colorTimer =
-          Timer.periodic(const Duration(milliseconds: 250), (_) => setState(() {}));
+      // uppdatera var 0.1 sek
+      _updateTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+        if (mounted && !_isFrozen) setState(() {});
+      });
     } catch (e) {
       debugPrint("❌ Fel vid kamera-initiering: $e");
     }
   }
 
   void _processFrame(CameraImage image) {
-    // Endast BGRA8888 (iOS) hanteras här
+    if (_isFrozen) return;
     if (Platform.isIOS && image.format.group == ImageFormatGroup.bgra8888) {
       final bytes = image.planes.first.bytes;
       final width = image.width;
       final height = image.height;
 
-      final stepX = max(1, width ~/ 10);
-      final stepY = max(1, height ~/ 10);
+      List<Color> extracted = [];
+      for (var pos in _samplePositions) {
+        int x = (pos.dx * width).toInt();
+        int y = (pos.dy * height).toInt();
+        int pixelIndex = (y * width + x) * 4;
 
-      final random = Random();
-      final List<Color> extracted = [];
-
-      for (int i = 0; i < 5; i++) {
-        final x = random.nextInt(width ~/ stepX) * stepX;
-        final y = random.nextInt(height ~/ stepY) * stepY;
-        final pixelIndex = (y * width + x) * 4;
         if (pixelIndex + 3 < bytes.length) {
           final b = bytes[pixelIndex];
           final g = bytes[pixelIndex + 1];
           final r = bytes[pixelIndex + 2];
           extracted.add(Color.fromARGB(255, r, g, b));
+        } else {
+          extracted.add(Colors.grey);
         }
       }
 
       _colors = extracted;
-      if (_captureRequested) {
-        _lastCapturedColors = List.from(extracted);
-        _captureRequested = false;
-        debugPrint("📸 Sparade färger: $_lastCapturedColors");
-      }
     }
+  }
+
+  Future<void> _captureColors() async {
+    if (!_isInitialized) return;
+
+    // Frys nuvarande färger
+    setState(() {
+      _capturedColors = List.from(_colors);
+      _isFrozen = true;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("📸 Färger fångade!"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+
+    debugPrint("🎨 Captured colors: $_capturedColors");
+  }
+
+  void _resetCapture() {
+    setState(() {
+      _isFrozen = false;
+      _capturedColors.clear();
+    });
   }
 
   @override
   void dispose() {
-    _colorTimer?.cancel();
+    _updateTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }
 
-  void _captureColors() {
-    _captureRequested = true;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Captured colors!"),
-        duration: Duration(seconds: 1),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
+    final colorsToShow = _isFrozen ? _capturedColors : _colors;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -152,50 +173,77 @@ class _CameraScreenState extends State<CameraScreen> {
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-          Positioned(
-            bottom: 90,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: _colors
-                  .map(
-                    (c) => Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 6),
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: c,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.4),
-                            blurRadius: 6,
-                          ),
-                        ],
+          // Färgikoner ovanpå kamerabilden på sina positioner
+          if (_isInitialized)
+            LayoutBuilder(
+              builder: (context, constraints) {
+                return Stack(
+                  children: List.generate(colorsToShow.length, (i) {
+                    final pos = _samplePositions[i];
+                    return Positioned(
+                      left: constraints.maxWidth * pos.dx - 25,
+                      top: constraints.maxHeight * pos.dy - 25,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 100),
+                        width: 50,
+                        height: 50,
+                        decoration: BoxDecoration(
+                          color: colorsToShow[i],
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.5),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  )
-                  .toList(),
+                    );
+                  }),
+                );
+              },
             ),
-          ),
 
+          // Capture & Reset-knappar
           Positioned(
             bottom: 20,
-            child: ElevatedButton(
-              onPressed: _captureColors,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.black,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 30, vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                  onPressed: _isFrozen ? null : _captureColors,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 30, vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                  ),
+                  child: const Text(
+                    "Capture Colors",
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
                 ),
-              ),
-              child: const Text(
-                "Capture Colors",
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
+                const SizedBox(width: 20),
+                if (_isFrozen)
+                  ElevatedButton(
+                    onPressed: _resetCapture,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey[300],
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                    child: const Text("Reset"),
+                  ),
+              ],
             ),
           ),
         ],
