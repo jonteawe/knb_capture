@@ -36,10 +36,13 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   CameraController? _controller;
   bool _isInitialized = false;
-  bool _isLocked = false;
+
+  bool _manualFreeze = false;
+  bool _autoFreeze = false;
+  double _stillTimer = 0;
+  double _lastChange = 0;
 
   int _frameCounter = 0;
-  double _stabilityTimer = 0;
 
   List<Color> _colors = [];
   List<Offset> _positions = [];
@@ -56,10 +59,7 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _initializeCamera() async {
-    if (!(Platform.isIOS || Platform.isAndroid)) {
-      debugPrint("❌ Kamera stöds ej på denna plattform.");
-      return;
-    }
+    if (!(Platform.isIOS || Platform.isAndroid)) return;
 
     try {
       final camera = widget.cameras.first;
@@ -95,7 +95,7 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _processFrame(CameraImage image) {
-    if (_isLocked) return;
+    if (_manualFreeze || _autoFreeze) return;
 
     _frameCounter++;
     bool shouldRebuild = _frameCounter % 2 == 0;
@@ -119,8 +119,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
       final List<Color> newColors = List.from(_colors);
       final List<Offset> newPositions = List.from(_positions);
-
-      double totalColorChange = 0.0;
+      double totalChange = 0;
 
       for (int i = 0; i < _positions.length; i++) {
         final pos = _positions[i];
@@ -169,23 +168,30 @@ class _CameraScreenState extends State<CameraScreen> {
         );
 
         newColors[i] = Color.lerp(_colors[i], bestColor, 0.8)!;
-        totalColorChange += _colorDistance(_colors[i], newColors[i]);
+        totalChange += _colorDistance(_colors[i], newColors[i]);
       }
 
-      // 🔒 Stillhet-detektion
-      double avgChange = totalColorChange / _colors.length;
+      double avgChange = totalChange / _colors.length;
 
+      // Adobe-style stillhet
       if (avgChange < 0.02) {
-        _stabilityTimer += 0.1;
-        if (_stabilityTimer >= 3.0) {
-          debugPrint("🔒 Låst färger (stilla)");
-          _isLocked = true;
-          _stabilityTimer = 0;
+        _stillTimer += 0.1;
+        if (_stillTimer > 3.0) {
+          _autoFreeze = true;
+          debugPrint("🔒 Auto-frys (kameran stilla)");
+          _stillTimer = 0;
         }
       } else {
-        _stabilityTimer = 0;
+        _stillTimer = 0;
       }
 
+      // Om kameran börjar röra sig mycket -> lås upp
+      if (avgChange > 0.08 && _autoFreeze) {
+        _autoFreeze = false;
+        debugPrint("🔓 Auto-upplåsning (rörelse upptäckt)");
+      }
+
+      _lastChange = avgChange;
       _positions = newPositions;
       _colors = newColors;
 
@@ -193,11 +199,10 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  void _unlock() {
+  void _toggleManualFreeze() {
     setState(() {
-      _isLocked = false;
-      _stabilityTimer = 0;
-      debugPrint("🔓 Rörelse – färger uppdateras igen.");
+      _manualFreeze = !_manualFreeze;
+      debugPrint(_manualFreeze ? "🧊 Manuell frysning" : "▶️ Fortsätt scanna");
     });
   }
 
@@ -210,7 +215,7 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: _unlock, // tillåter att du "väcker" appen manuellt också
+      onTap: _toggleManualFreeze,
       child: Scaffold(
         backgroundColor: Colors.black,
         body: Stack(
@@ -238,7 +243,7 @@ class _CameraScreenState extends State<CameraScreen> {
                         left: dx - 25,
                         top: dy - 25,
                         child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 25),
+                          duration: const Duration(milliseconds: 30),
                           width: 50,
                           height: 50,
                           decoration: BoxDecoration(
