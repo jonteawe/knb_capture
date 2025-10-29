@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,12 +44,11 @@ class _CameraScreenState extends State<CameraScreen> {
   List<Offset> _positions = [];
   List<Color> _capturedColors = [];
   List<Offset> _capturedPositions = [];
+  XFile? _capturedImage;
 
   final int _sampleCount = 5;
   final Random _rand = Random();
-
-  // Synlig del av kameran (över UI)
-  final double cameraVisibleFraction = 0.80; // Endast 80 % av höjden används
+  final double cameraVisibleFraction = 0.80;
 
   @override
   void initState() {
@@ -57,10 +57,7 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _initializeCamera() async {
-    if (!(Platform.isIOS || Platform.isAndroid)) {
-      debugPrint("❌ Kamera stöds ej på denna plattform.");
-      return;
-    }
+    if (!(Platform.isIOS || Platform.isAndroid)) return;
 
     try {
       final camera = widget.cameras.first;
@@ -71,13 +68,11 @@ class _CameraScreenState extends State<CameraScreen> {
         imageFormatGroup:
             Platform.isIOS ? ImageFormatGroup.bgra8888 : ImageFormatGroup.yuv420,
       );
-
       await _controller!.initialize();
       await _controller!.startImageStream(_processFrame);
       setState(() => _isInitialized = true);
-      debugPrint("✅ Kamera initierad och aktiv.");
     } catch (e) {
-      debugPrint("❌ Fel vid initiering: $e");
+      debugPrint("❌ Camera init failed: $e");
     }
   }
 
@@ -105,7 +100,6 @@ class _CameraScreenState extends State<CameraScreen> {
       final width = image.width;
       final height = image.height;
 
-      // Beskär kamerazonen (t.ex. bort nedre 20 %)
       final int minY = (height * (1 - cameraVisibleFraction) / 2).toInt();
       final int maxY = (height * (1 - (1 - cameraVisibleFraction) / 2)).toInt();
       final int minX = (width * 0.1).toInt();
@@ -133,18 +127,33 @@ class _CameraScreenState extends State<CameraScreen> {
         int bestY = cy;
         Color bestColor = _colors[i];
 
-        for (int dx = -20; dx <= 20; dx += 4) {
-          for (int dy = -20; dy <= 20; dy += 4) {
+        // Sök färgkluster (5x5-pixlar)
+        for (int dx = -20; dx <= 20; dx += 5) {
+          for (int dy = -20; dy <= 20; dy += 5) {
             int nx = (cx + dx).clamp(minX, maxX);
             int ny = (cy + dy).clamp(minY, maxY);
-            int idx = (ny * width + nx) * 4;
-            if (idx + 3 >= bytes.length) continue;
+            double rSum = 0, gSum = 0, bSum = 0;
+            int count = 0;
 
-            final b = bytes[idx];
-            final g = bytes[idx + 1];
-            final r = bytes[idx + 2];
+            // genomsnitt på 5x5 block
+            for (int ox = -2; ox <= 2; ox++) {
+              for (int oy = -2; oy <= 2; oy++) {
+                int xx = (nx + ox).clamp(minX, maxX);
+                int yy = (ny + oy).clamp(minY, maxY);
+                int idx = (yy * width + xx) * 4;
+                if (idx + 3 >= bytes.length) continue;
+                bSum += bytes[idx].toDouble();
+                gSum += bytes[idx + 1].toDouble();
+                rSum += bytes[idx + 2].toDouble();
+                count++;
+              }
+            }
+
+            if (count == 0) continue;
+            int r = (rSum / count).toInt();
+            int g = (gSum / count).toInt();
+            int b = (bSum / count).toInt();
             double score = _colorInterest(r, g, b);
-
             final c = Color.fromARGB(255, r, g, b);
 
             for (int j = 0; j < _colors.length; j++) {
@@ -161,13 +170,14 @@ class _CameraScreenState extends State<CameraScreen> {
           }
         }
 
-        double snapSpeed = min(1.0, max(0.6, bestScore));
+        // snabb men mjuk rörelse mot ny färg
+        double snapSpeed = min(1.0, max(0.7, bestScore));
         Offset target = Offset(bestX / width, bestY / height);
         newPositions[i] = Offset(
           pos.dx + (target.dx - pos.dx) * snapSpeed,
           pos.dy + (target.dy - pos.dy) * snapSpeed,
         );
-        newColors[i] = Color.lerp(_colors[i], bestColor, 0.8)!;
+        newColors[i] = Color.lerp(_colors[i], bestColor, 0.9)!;
       }
 
       _positions = newPositions;
@@ -177,22 +187,35 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _captureColors() async {
-    if (!_isInitialized) return;
-    setState(() {
-      _capturedColors = List.from(_colors);
-      _capturedPositions = List.from(_positions);
-      _isFrozen = true;
-    });
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text("📸 Färger fångade!")));
+    if (!_isInitialized || _isFrozen) return;
+    try {
+      await _controller!.stopImageStream();
+      final dir = await getTemporaryDirectory();
+      final path = '${dir.path}/capture_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final file = await _controller!.takePicture();
+      await file.saveTo(path);
+
+      setState(() {
+        _capturedImage = XFile(path);
+        _capturedColors = List.from(_colors);
+        _capturedPositions = List.from(_positions);
+        _isFrozen = true;
+      });
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("📸 Colors captured!")));
+    } catch (e) {
+      debugPrint("❌ Capture failed: $e");
+    }
   }
 
-  void _resetCapture() {
+  Future<void> _resetCapture() async {
     setState(() {
       _isFrozen = false;
+      _capturedImage = null;
       _capturedColors.clear();
       _capturedPositions.clear();
     });
+    await _controller!.startImageStream(_processFrame);
   }
 
   @override
@@ -210,12 +233,13 @@ class _CameraScreenState extends State<CameraScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Riktig kameravy som tar upp 80% av skärmen
           if (_isInitialized)
             FractionallySizedBox(
               heightFactor: cameraVisibleFraction,
               alignment: Alignment.topCenter,
-              child: CameraPreview(_controller!),
+              child: _capturedImage == null
+                  ? CameraPreview(_controller!)
+                  : Image.file(File(_capturedImage!.path), fit: BoxFit.cover),
             )
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
@@ -233,7 +257,7 @@ class _CameraScreenState extends State<CameraScreen> {
                       left: dx - 25,
                       top: dy - 25,
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 25),
+                        duration: const Duration(milliseconds: 20),
                         width: 50,
                         height: 50,
                         decoration: BoxDecoration(
@@ -254,7 +278,6 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
 
-          // UI under kameran
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
@@ -270,8 +293,8 @@ class _CameraScreenState extends State<CameraScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 30, vertical: 14),
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 30, vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(30),
                         ),
