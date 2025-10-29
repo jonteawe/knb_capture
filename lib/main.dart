@@ -127,7 +127,7 @@ class _CameraScreenState extends State<CameraScreen> {
         int bestY = cy;
         Color bestColor = _colors[i];
 
-        // Sök färgkluster (5x5-pixlar)
+        // 5x5 cluster scan
         for (int dx = -20; dx <= 20; dx += 5) {
           for (int dy = -20; dy <= 20; dy += 5) {
             int nx = (cx + dx).clamp(minX, maxX);
@@ -135,7 +135,6 @@ class _CameraScreenState extends State<CameraScreen> {
             double rSum = 0, gSum = 0, bSum = 0;
             int count = 0;
 
-            // genomsnitt på 5x5 block
             for (int ox = -2; ox <= 2; ox++) {
               for (int oy = -2; oy <= 2; oy++) {
                 int xx = (nx + ox).clamp(minX, maxX);
@@ -170,7 +169,6 @@ class _CameraScreenState extends State<CameraScreen> {
           }
         }
 
-        // snabb men mjuk rörelse mot ny färg
         double snapSpeed = min(1.0, max(0.7, bestScore));
         Offset target = Offset(bestX / width, bestY / height);
         newPositions[i] = Offset(
@@ -233,6 +231,7 @@ class _CameraScreenState extends State<CameraScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
+          // 📷 Camera preview
           if (_isInitialized)
             FractionallySizedBox(
               heightFactor: cameraVisibleFraction,
@@ -244,6 +243,32 @@ class _CameraScreenState extends State<CameraScreen> {
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
+          // 🎨 Color Palette Top Bar
+          SafeArea(
+            child: Container(
+              height: 80,
+              color: Colors.black.withOpacity(0.85),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: ( _isFrozen ? _capturedColors : _colors )
+                    .map(
+                      (c) => AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        width: 60,
+                        height: 60,
+                        decoration: BoxDecoration(
+                          color: c,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ),
+
+          // 🎯 Color dots on camera
           if (_isInitialized)
             LayoutBuilder(
               builder: (context, constraints) {
@@ -278,6 +303,7 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
 
+          // 🎛 Bottom UI (buttons)
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
