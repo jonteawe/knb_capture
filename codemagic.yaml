@@ -8,52 +8,15 @@ workflows:
 
     scripts:
       - name: Install dependencies
-        script: |
-          flutter pub get
+        script: flutter pub get
 
-      - name: Build iOS project (no codesign)
+      - name: Build iOS app (no codesign)
         script: |
           flutter build ios --release --no-codesign
-
-      - name: Export IPA manually using Xcode
-        script: |
-          set -e
-          echo "=== Exporting IPA manually ==="
           cd build/ios/iphoneos
           mkdir -p Payload
-          APP_NAME=$(find . -maxdepth 1 -type d -name "*.app" | head -n 1)
-          echo "Found app: $APP_NAME"
-          cp -r "$APP_NAME" Payload/
-          zip -r ../../Runner.ipa Payload
-          cd ../../..
-          echo "Created Runner.ipa at build/Runner.ipa"
-
-      - name: Collect IPA into artifacts
-        script: |
-          mkdir -p artifacts
-          if [ -f build/Runner.ipa ]; then
-            cp build/Runner.ipa artifacts/
-            echo "Copied Runner.ipa to artifacts/"
-          else
-            echo "No IPA found, zipping iOS folder as fallback."
-            (cd build/ios && zip -r ../ios_build_output.zip .)
-            mv build/ios_build_output.zip artifacts/
-          fi
-          ls -al artifacts
-
-      - name: "Optional: make a direct download URL (transfer.sh)"
-        script: |
-          if [ -f artifacts/Runner.ipa ]; then
-            echo "Uploading Runner.ipa to transfer.sh..."
-            URL=$(curl -s --upload-file artifacts/Runner.ipa https://transfer.sh/Runner.ipa)
-            echo "Direct download (valid ~14 days):"
-            echo "$URL"
-          fi
+          cp -r Runner.app Payload/
+          zip -r ../../ios_build_output.zip Payload
 
     artifacts:
-      - "artifacts/**"
-
-    publishing:
-      email:
-        recipients:
-          - jonteawe@gmail.com
+      - build/ios/ios_build_output.zip
