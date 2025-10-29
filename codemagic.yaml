@@ -1,6 +1,6 @@
 workflows:
   ios_build:
-    name: Build iOS IPA (No Codesign)
+    name: Build iOS IPA (Simulator / No Codesign)
     environment:
       flutter: stable
       xcode: latest
@@ -10,13 +10,49 @@ workflows:
       - name: Install dependencies
         script: flutter pub get
 
-      - name: Build iOS app (no codesign)
+      - name: Build iOS app (simulator, no codesign)
         script: |
-          flutter build ios --release --no-codesign
-          cd build/ios/iphoneos
+          echo "=== Building iOS app for simulator ==="
+          flutter build ios --simulator
+          ls -al build/ios/iphonesimulator
+
+      - name: Export .app into .ipa
+        script: |
+          echo "=== Packaging .ipa ==="
+          cd build/ios/iphonesimulator
           mkdir -p Payload
           cp -r Runner.app Payload/
-          zip -r ../../ios_build_output.zip Payload
+          zip -r ../../Runner.ipa Payload
+          cd ../../..
+          echo "✅ Created Runner.ipa at build/Runner.ipa"
+
+      - name: Collect IPA into artifacts
+        script: |
+          mkdir -p artifacts
+          if [ -f build/Runner.ipa ]; then
+            cp build/Runner.ipa artifacts/KnbCapture.ipa
+            echo "✅ Copied KnbCapture.ipa to artifacts/"
+          else
+            echo "⚠️ No IPA found, creating fallback zip"
+            (cd build/ios && zip -r ../ios_build_output.zip .)
+            mv build/ios_build_output.zip artifacts/
+          fi
+          ls -al artifacts
+
+      - name: Upload IPA to transfer.sh
+        script: |
+          if [ -f artifacts/KnbCapture.ipa ]; then
+            echo "=== Uploading KnbCapture.ipa to transfer.sh ==="
+            UPLOAD_URL=$(curl -s --upload-file artifacts/KnbCapture.ipa https://transfer.sh/KnbCapture.ipa)
+            echo "✅ Direct download (valid ~14 days):"
+            echo "$UPLOAD_URL"
+            echo "$UPLOAD_URL" > artifacts/download_link.txt
+          fi
 
     artifacts:
-      - build/ios/ios_build_output.zip
+      - artifacts/**
+
+    publishing:
+      email:
+        recipients:
+          - jonteawe@gmail.com
