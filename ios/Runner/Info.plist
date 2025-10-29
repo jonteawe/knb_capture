@@ -73,5 +73,9 @@
 
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- 🔄 Gyroskop / rörelsesensor -->
+	<key>NSMotionUsageDescription</key>
+	<string>Appen använder rörelsesensorn (gyroskop) för att upptäcka kamerarörelser.</string>
 </dict>
 </plist>
