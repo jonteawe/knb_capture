@@ -36,20 +36,20 @@ class CameraScreen extends StatefulWidget {
 class _CameraScreenState extends State<CameraScreen> {
   CameraController? _controller;
   bool _isInitialized = false;
+  bool _manualPause = false;
+  bool _autoPause = false;
+  bool _isCaptured = false;
 
-  bool _manualFreeze = false;
-  bool _autoFreeze = false;
   double _stillTimer = 0;
-  double _lastChange = 0;
-
   int _frameCounter = 0;
 
   List<Color> _colors = [];
   List<Offset> _positions = [];
+  List<Color> _capturedColors = [];
+  List<Offset> _capturedPositions = [];
 
   final int _sampleCount = 5;
   final Random _rand = Random();
-
   final double cameraVisibleFraction = 0.80;
 
   @override
@@ -59,7 +59,10 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _initializeCamera() async {
-    if (!(Platform.isIOS || Platform.isAndroid)) return;
+    if (!(Platform.isIOS || Platform.isAndroid)) {
+      debugPrint("❌ Kamera stöds ej på denna plattform.");
+      return;
+    }
 
     try {
       final camera = widget.cameras.first;
@@ -95,7 +98,7 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _processFrame(CameraImage image) {
-    if (_manualFreeze || _autoFreeze) return;
+    if (_manualPause || _autoPause || _isCaptured) return;
 
     _frameCounter++;
     bool shouldRebuild = _frameCounter % 2 == 0;
@@ -166,43 +169,59 @@ class _CameraScreenState extends State<CameraScreen> {
           pos.dx + (target.dx - pos.dx) * snapSpeed,
           pos.dy + (target.dy - pos.dy) * snapSpeed,
         );
-
         newColors[i] = Color.lerp(_colors[i], bestColor, 0.8)!;
         totalChange += _colorDistance(_colors[i], newColors[i]);
       }
 
       double avgChange = totalChange / _colors.length;
 
-      // Adobe-style stillhet
+      // 🔒 Pausa efter 3 sek stillhet
       if (avgChange < 0.02) {
         _stillTimer += 0.1;
         if (_stillTimer > 3.0) {
-          _autoFreeze = true;
-          debugPrint("🔒 Auto-frys (kameran stilla)");
+          _autoPause = true;
           _stillTimer = 0;
+          debugPrint("⏸ Auto-paused efter stillhet");
         }
       } else {
         _stillTimer = 0;
       }
 
-      // Om kameran börjar röra sig mycket -> lås upp
-      if (avgChange > 0.08 && _autoFreeze) {
-        _autoFreeze = false;
-        debugPrint("🔓 Auto-upplåsning (rörelse upptäckt)");
+      // 🔓 Starta igen om rörelse upptäcks
+      if (avgChange > 0.08 && _autoPause) {
+        _autoPause = false;
+        debugPrint("▶️ Rörelse upptäckt – fortsätter scanna");
       }
 
-      _lastChange = avgChange;
       _positions = newPositions;
       _colors = newColors;
-
       if (shouldRebuild && mounted) setState(() {});
     }
   }
 
-  void _toggleManualFreeze() {
+  void _toggleManualPause() {
     setState(() {
-      _manualFreeze = !_manualFreeze;
-      debugPrint(_manualFreeze ? "🧊 Manuell frysning" : "▶️ Fortsätt scanna");
+      _manualPause = !_manualPause;
+      debugPrint(_manualPause ? "🧊 Manuell paus" : "▶️ Fortsätter skanna");
+    });
+  }
+
+  Future<void> _captureColors() async {
+    if (!_isInitialized) return;
+    setState(() {
+      _capturedColors = List.from(_colors);
+      _capturedPositions = List.from(_positions);
+      _isCaptured = true;
+    });
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text("📸 Färger fångade!")));
+  }
+
+  void _resetCapture() {
+    setState(() {
+      _isCaptured = false;
+      _capturedColors.clear();
+      _capturedPositions.clear();
     });
   }
 
@@ -214,8 +233,13 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorsToShow =
+        _isCaptured ? _capturedColors : _colors;
+    final positionsToShow =
+        _isCaptured ? _capturedPositions : _positions;
+
     return GestureDetector(
-      onTap: _toggleManualFreeze,
+      onTap: _toggleManualPause,
       child: Scaffold(
         backgroundColor: Colors.black,
         body: Stack(
@@ -233,9 +257,9 @@ class _CameraScreenState extends State<CameraScreen> {
               LayoutBuilder(
                 builder: (context, constraints) {
                   return Stack(
-                    children: List.generate(_colors.length, (i) {
-                      if (i >= _positions.length) return const SizedBox();
-                      final pos = _positions[i];
+                    children: List.generate(colorsToShow.length, (i) {
+                      if (i >= positionsToShow.length) return const SizedBox();
+                      final pos = positionsToShow[i];
                       final dx = pos.dx * constraints.maxWidth;
                       final dy =
                           pos.dy * constraints.maxHeight * cameraVisibleFraction;
@@ -243,11 +267,11 @@ class _CameraScreenState extends State<CameraScreen> {
                         left: dx - 25,
                         top: dy - 25,
                         child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 30),
+                          duration: const Duration(milliseconds: 25),
                           width: 50,
                           height: 50,
                           decoration: BoxDecoration(
-                            color: _colors[i],
+                            color: colorsToShow[i],
                             shape: BoxShape.circle,
                             border: Border.all(color: Colors.white, width: 2),
                             boxShadow: [
@@ -264,20 +288,51 @@ class _CameraScreenState extends State<CameraScreen> {
                 },
               ),
 
+            // UI under kameran
             Align(
               alignment: Alignment.bottomCenter,
               child: Container(
-                height:
-                    MediaQuery.of(context).size.height * (1 - cameraVisibleFraction),
+                height: MediaQuery.of(context).size.height *
+                    (1 - cameraVisibleFraction),
                 color: Colors.black,
-                child: const Center(
-                  child: Text(
-                    "Knb Capture",
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.white54,
-                      letterSpacing: 1.2,
-                    ),
+                padding: const EdgeInsets.only(bottom: 40),
+                child: Center(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      ElevatedButton(
+                        onPressed: _isCaptured ? null : _captureColors,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 30, vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                        ),
+                        child: const Text(
+                          "Capture Colors",
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      const SizedBox(width: 20),
+                      if (_isCaptured)
+                        ElevatedButton(
+                          onPressed: _resetCapture,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.grey[300],
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 20, vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(30),
+                            ),
+                          ),
+                          child: const Text("Reset"),
+                        ),
+                    ],
                   ),
                 ),
               ),
