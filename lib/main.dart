@@ -51,7 +51,6 @@ class _CameraScreenState extends State<CameraScreen> {
 
   final int _sampleCount = 5;
   final Random _rand = Random();
-  final double _motionSmoothness = 0.25;
 
   @override
   void initState() {
@@ -99,10 +98,10 @@ class _CameraScreenState extends State<CameraScreen> {
         441.67;
   }
 
-  double _colorQuality(int r, int g, int b) {
-    double brightness = (r + g + b) / 3.0;
-    double contrast = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
-    return ((contrast * 1.5) + (255 - (brightness - 127.5).abs())) / 510.0;
+  double _contrastScore(int r, int g, int b) {
+    final brightness = (r + g + b) / 3.0;
+    final contrast = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
+    return (contrast * 1.4 + (255 - (brightness - 128).abs())) / 510.0;
   }
 
   void _processFrame(CameraImage image) {
@@ -112,8 +111,8 @@ class _CameraScreenState extends State<CameraScreen> {
       final width = image.width;
       final height = image.height;
 
+      // Initiera punkter
       if (_positions.isEmpty) {
-        // Fördela initiala punkter jämnt
         for (int i = 0; i < _sampleCount; i++) {
           _positions.add(Offset(0.2 + i * 0.15, 0.5));
           _colors.add(Colors.transparent);
@@ -130,14 +129,14 @@ class _CameraScreenState extends State<CameraScreen> {
         cx = cx.clamp(0, width - 1);
         cy = cy.clamp(0, height - 1);
 
+        double bestScore = 0;
         int bestX = cx;
         int bestY = cy;
-        double bestScore = 0;
         Color bestColor = _colors[i];
 
-        // Scanna litet område (lokal färgdetektion)
-        for (int dx = -8; dx <= 8; dx += 2) {
-          for (int dy = -8; dy <= 8; dy += 2) {
+        // Scanna litet område – vi letar efter starka kontraster
+        for (int dx = -12; dx <= 12; dx += 3) {
+          for (int dy = -12; dy <= 12; dy += 3) {
             int nx = (cx + dx).clamp(0, width - 1);
             int ny = (cy + dy).clamp(0, height - 1);
             int idx = (ny * width + nx) * 4;
@@ -146,36 +145,36 @@ class _CameraScreenState extends State<CameraScreen> {
             final b = bytes[idx];
             final g = bytes[idx + 1];
             final r = bytes[idx + 2];
-            double q = _colorQuality(r, g, b);
+            double score = _contrastScore(r, g, b);
 
-            // Färger som är för lika andra får lite lägre poäng
+            final c = Color.fromARGB(255, r, g, b);
+            // Undvik färger för lika andra
             for (int j = 0; j < _colors.length; j++) {
               if (j == i) continue;
-              double diff = _colorDistance(Color.fromARGB(255, r, g, b), _colors[j]);
-              if (diff < 0.15) q *= 0.7;
+              score -= max(0, 0.2 - _colorDistance(c, _colors[j])) * 1.2;
             }
 
-            if (q > bestScore) {
-              bestScore = q;
+            if (score > bestScore) {
+              bestScore = score;
               bestX = nx;
               bestY = ny;
-              bestColor = Color.fromARGB(255, r, g, b);
+              bestColor = c;
             }
           }
         }
 
-        // Sätt ny smidig position mot bästa färgområdet
+        // Reaktivitet: hur snabbt flyttar sig prob
+        double colorChange = _colorDistance(bestColor, _colors[i]);
+        double snap = colorChange > 0.1 ? 0.6 : 0.25;
+
+        // Flytta snabbt mot nytt mål
         Offset target = Offset(bestX / width, bestY / height);
         newPositions[i] = Offset(
-          pos.dx + (target.dx - pos.dx) * _motionSmoothness,
-          pos.dy + (target.dy - pos.dy) * _motionSmoothness,
+          pos.dx + (target.dx - pos.dx) * snap,
+          pos.dy + (target.dy - pos.dy) * snap,
         );
 
-        // Om färgen knappt ändrats → stanna kvar
-        double colorChange = _colorDistance(bestColor, _colors[i]);
-        if (colorChange > 0.05) {
-          newColors[i] = Color.lerp(_colors[i], bestColor, 0.4)!;
-        }
+        newColors[i] = Color.lerp(_colors[i], bestColor, 0.6)!;
       }
 
       _positions = newPositions;
@@ -224,7 +223,7 @@ class _CameraScreenState extends State<CameraScreen> {
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-          // Placera färgcirklar exakt där färgen hittats
+          // Färgikoner
           if (_isInitialized)
             LayoutBuilder(
               builder: (context, constraints) {
@@ -238,7 +237,7 @@ class _CameraScreenState extends State<CameraScreen> {
                       left: dx - 25,
                       top: dy - 25,
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 80),
+                        duration: const Duration(milliseconds: 60),
                         width: 50,
                         height: 50,
                         decoration: BoxDecoration(
@@ -259,7 +258,7 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
 
-          // Capture / Reset
+          // Buttons
           Positioned(
             bottom: 20,
             left: 0,
