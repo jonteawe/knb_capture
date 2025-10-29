@@ -45,13 +45,13 @@ class _CameraScreenState extends State<CameraScreen> {
   Timer? _updateTimer;
 
   List<Color> _colors = [];
-  List<Color> _capturedColors = [];
   List<Offset> _positions = [];
+  List<Color> _capturedColors = [];
   List<Offset> _capturedPositions = [];
-  List<Offset> _velocities = [];
 
   final int _sampleCount = 5;
   final Random _rand = Random();
+  final double _motionSmoothness = 0.25;
 
   @override
   void initState() {
@@ -67,9 +67,10 @@ class _CameraScreenState extends State<CameraScreen> {
 
     try {
       final camera = widget.cameras.first;
+
       _controller = CameraController(
         camera,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: Platform.isIOS
             ? ImageFormatGroup.bgra8888
@@ -83,7 +84,7 @@ class _CameraScreenState extends State<CameraScreen> {
       setState(() => _isInitialized = true);
       debugPrint("✅ Kamera initierad och aktiv.");
 
-      _updateTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      _updateTimer = Timer.periodic(const Duration(milliseconds: 80), (_) {
         if (mounted && !_isFrozen) setState(() {});
       });
     } catch (e) {
@@ -91,17 +92,17 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  double _colorDiff(Color a, Color b) {
-    return ((a.red - b.red).abs() +
-            (a.green - b.green).abs() +
-            (a.blue - b.blue).abs()) /
-        3.0;
+  double _colorDistance(Color a, Color b) {
+    return sqrt(pow(a.red - b.red, 2) +
+            pow(a.green - b.green, 2) +
+            pow(a.blue - b.blue, 2)) /
+        441.67;
   }
 
-  double _colorIntensity(int r, int g, int b) {
-    final double brightness = (r + g + b) / 3.0;
-    final double saturation = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
-    return (saturation * 1.2 + (255 - (brightness - 127.5).abs())) / 510.0;
+  double _colorQuality(int r, int g, int b) {
+    double brightness = (r + g + b) / 3.0;
+    double contrast = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
+    return ((contrast * 1.5) + (255 - (brightness - 127.5).abs())) / 510.0;
   }
 
   void _processFrame(CameraImage image) {
@@ -111,71 +112,73 @@ class _CameraScreenState extends State<CameraScreen> {
       final width = image.width;
       final height = image.height;
 
-      // initiera positioner & hastigheter
       if (_positions.isEmpty) {
+        // Fördela initiala punkter jämnt
         for (int i = 0; i < _sampleCount; i++) {
-          _positions.add(Offset(0.25 + 0.1 * i, 0.5));
-          _velocities.add(Offset.zero);
+          _positions.add(Offset(0.2 + i * 0.15, 0.5));
           _colors.add(Colors.transparent);
         }
       }
 
       List<Color> newColors = List.from(_colors);
+      List<Offset> newPositions = List.from(_positions);
 
       for (int i = 0; i < _positions.length; i++) {
         final pos = _positions[i];
-        int cx = (pos.dx * width).clamp(0, width - 1).toInt();
-        int cy = (pos.dy * height).clamp(0, height - 1).toInt();
-        int idx = (cy * width + cx) * 4;
-        if (idx + 3 >= bytes.length) continue;
+        int cx = (pos.dx * width).toInt();
+        int cy = (pos.dy * height).toInt();
+        cx = cx.clamp(0, width - 1);
+        cy = cy.clamp(0, height - 1);
 
-        final b = bytes[idx];
-        final g = bytes[idx + 1];
-        final r = bytes[idx + 2];
-        final color = Color.fromARGB(255, r, g, b);
-        newColors[i] = color;
+        int bestX = cx;
+        int bestY = cy;
+        double bestScore = 0;
+        Color bestColor = _colors[i];
 
-        // mäta färgkvalitet
-        double quality = _colorIntensity(r, g, b);
+        // Scanna litet område (lokal färgdetektion)
+        for (int dx = -8; dx <= 8; dx += 2) {
+          for (int dy = -8; dy <= 8; dy += 2) {
+            int nx = (cx + dx).clamp(0, width - 1);
+            int ny = (cy + dy).clamp(0, height - 1);
+            int idx = (ny * width + nx) * 4;
+            if (idx + 3 >= bytes.length) continue;
 
-        // undvik att likna andra färger för mycket
-        double similarityPenalty = 0;
-        for (int j = 0; j < _colors.length; j++) {
-          if (j == i) continue;
-          double diff = _colorDiff(color, _colors[j]);
-          similarityPenalty += (diff < 40 ? (1 - diff / 40) : 0);
+            final b = bytes[idx];
+            final g = bytes[idx + 1];
+            final r = bytes[idx + 2];
+            double q = _colorQuality(r, g, b);
+
+            // Färger som är för lika andra får lite lägre poäng
+            for (int j = 0; j < _colors.length; j++) {
+              if (j == i) continue;
+              double diff = _colorDistance(Color.fromARGB(255, r, g, b), _colors[j]);
+              if (diff < 0.15) q *= 0.7;
+            }
+
+            if (q > bestScore) {
+              bestScore = q;
+              bestX = nx;
+              bestY = ny;
+              bestColor = Color.fromARGB(255, r, g, b);
+            }
+          }
         }
 
-        double interest = (quality - similarityPenalty * 0.5).clamp(0, 1);
+        // Sätt ny smidig position mot bästa färgområdet
+        Offset target = Offset(bestX / width, bestY / height);
+        newPositions[i] = Offset(
+          pos.dx + (target.dx - pos.dx) * _motionSmoothness,
+          pos.dy + (target.dy - pos.dy) * _motionSmoothness,
+        );
 
-        // Ju sämre kvalitet → större chans att flytta
-        if (_rand.nextDouble() > interest) {
-          double dx = (_rand.nextDouble() - 0.5) * 0.05;
-          double dy = (_rand.nextDouble() - 0.5) * 0.05;
-
-          // Lägg till liten slumpmässig "impuls"
-          _velocities[i] = Offset(
-            (_velocities[i].dx + dx) * 0.7,
-            (_velocities[i].dy + dy) * 0.7,
-          );
-        } else {
-          // Annars sakta ner rörelsen
-          _velocities[i] = _velocities[i] * 0.8;
+        // Om färgen knappt ändrats → stanna kvar
+        double colorChange = _colorDistance(bestColor, _colors[i]);
+        if (colorChange > 0.05) {
+          newColors[i] = Color.lerp(_colors[i], bestColor, 0.4)!;
         }
-
-        // Ny smidig position
-        Offset newPos = Offset(
-          (pos.dx + _velocities[i].dx).clamp(0.05, 0.95),
-          (pos.dy + _velocities[i].dy).clamp(0.05, 0.95),
-        );
-
-        // Smooth lerp
-        _positions[i] = Offset(
-          pos.dx + (newPos.dx - pos.dx) * 0.3,
-          pos.dy + (newPos.dy - pos.dy) * 0.3,
-        );
       }
 
+      _positions = newPositions;
       _colors = newColors;
     }
   }
@@ -221,7 +224,7 @@ class _CameraScreenState extends State<CameraScreen> {
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-          // Dynamiska färgikoner
+          // Placera färgcirklar exakt där färgen hittats
           if (_isInitialized)
             LayoutBuilder(
               builder: (context, constraints) {
@@ -235,7 +238,7 @@ class _CameraScreenState extends State<CameraScreen> {
                       left: dx - 25,
                       top: dy - 25,
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 100),
+                        duration: const Duration(milliseconds: 80),
                         width: 50,
                         height: 50,
                         decoration: BoxDecoration(
@@ -244,7 +247,7 @@ class _CameraScreenState extends State<CameraScreen> {
                           border: Border.all(color: Colors.white, width: 2),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.5),
+                              color: Colors.black.withOpacity(0.4),
                               blurRadius: 6,
                             ),
                           ],
@@ -256,7 +259,7 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
 
-          // UI-knappar
+          // Capture / Reset
           Positioned(
             bottom: 20,
             left: 0,
