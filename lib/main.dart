@@ -1,8 +1,10 @@
 import 'dart:async';
-import 'dart:math';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'dart:ui' as ui;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,6 +48,9 @@ class _CameraScreenState extends State<CameraScreen> {
   Timer? _colorTimer;
   List<Color> _colors = List.generate(5, (_) => Colors.transparent);
 
+  bool _captureRequested = false;
+  List<Color> _lastCapturedColors = [];
+
   @override
   void initState() {
     super.initState();
@@ -53,7 +58,6 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _initializeCamera() async {
-    // Endast iOS eller Android stöds
     if (!(Platform.isIOS || Platform.isAndroid)) {
       debugPrint("❌ Kamera stöds ej på denna plattform.");
       return;
@@ -64,23 +68,20 @@ class _CameraScreenState extends State<CameraScreen> {
 
       _controller = CameraController(
         camera,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup: Platform.isIOS
-            ? ImageFormatGroup.bgra8888 // iOS kräver BGRA8888
-            : ImageFormatGroup.yuv420, // Android-standard
+            ? ImageFormatGroup.bgra8888
+            : ImageFormatGroup.yuv420,
       );
 
       await _controller!.initialize();
-      // iOS fix: kort delay efter init
       await Future.delayed(const Duration(milliseconds: 200));
-
       await _controller!.startImageStream(_processFrame);
 
       setState(() => _isInitialized = true);
       debugPrint("✅ Kamera initierad och aktiv.");
 
-      // uppdatera UI var 0.25 sek
       _colorTimer =
           Timer.periodic(const Duration(milliseconds: 250), (_) => setState(() {}));
     } catch (e) {
@@ -89,17 +90,37 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _processFrame(CameraImage image) {
-    // Enkel simulering av färg-analys (Adobe-Capture-stil)
-    final rand = Random();
-    _colors = List.generate(
-      5,
-      (_) => Color.fromRGBO(
-        rand.nextInt(255),
-        rand.nextInt(255),
-        rand.nextInt(255),
-        1.0,
-      ),
-    );
+    // Endast BGRA8888 (iOS) hanteras här
+    if (Platform.isIOS && image.format.group == ImageFormatGroup.bgra8888) {
+      final bytes = image.planes.first.bytes;
+      final width = image.width;
+      final height = image.height;
+
+      final stepX = max(1, width ~/ 10);
+      final stepY = max(1, height ~/ 10);
+
+      final random = Random();
+      final List<Color> extracted = [];
+
+      for (int i = 0; i < 5; i++) {
+        final x = random.nextInt(width ~/ stepX) * stepX;
+        final y = random.nextInt(height ~/ stepY) * stepY;
+        final pixelIndex = (y * width + x) * 4;
+        if (pixelIndex + 3 < bytes.length) {
+          final b = bytes[pixelIndex];
+          final g = bytes[pixelIndex + 1];
+          final r = bytes[pixelIndex + 2];
+          extracted.add(Color.fromARGB(255, r, g, b));
+        }
+      }
+
+      _colors = extracted;
+      if (_captureRequested) {
+        _lastCapturedColors = List.from(extracted);
+        _captureRequested = false;
+        debugPrint("📸 Sparade färger: $_lastCapturedColors");
+      }
+    }
   }
 
   @override
@@ -109,6 +130,16 @@ class _CameraScreenState extends State<CameraScreen> {
     super.dispose();
   }
 
+  void _captureColors() {
+    _captureRequested = true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Captured colors!"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -116,13 +147,11 @@ class _CameraScreenState extends State<CameraScreen> {
       body: Stack(
         alignment: Alignment.center,
         children: [
-          // Kamera-preview
           if (_isInitialized)
             CameraPreview(_controller!)
           else
             const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-          // Färg-bubblor (overlay)
           Positioned(
             bottom: 90,
             child: Row(
@@ -150,13 +179,10 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
           ),
 
-          // Capture-knapp
           Positioned(
             bottom: 20,
             child: ElevatedButton(
-              onPressed: () {
-                debugPrint("📸 Färger fångade (logik läggs till senare).");
-              },
+              onPressed: _captureColors,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.black,
