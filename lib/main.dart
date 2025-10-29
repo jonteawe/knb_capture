@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:sensors_plus/sensors_plus.dart';
+import 'dart:ui' as ui;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -40,8 +43,11 @@ class _CameraScreenState extends State<CameraScreen> {
   bool _autoPause = false;
   bool _isCaptured = false;
 
+  ui.Image? _capturedImage;
   double _stillTimer = 0;
-  int _frameCounter = 0;
+  double _gyroMotion = 0;
+
+  StreamSubscription? _gyroSub;
 
   List<Color> _colors = [];
   List<Offset> _positions = [];
@@ -56,13 +62,25 @@ class _CameraScreenState extends State<CameraScreen> {
   void initState() {
     super.initState();
     _initializeCamera();
+    _listenGyro();
+  }
+
+  void _listenGyro() {
+    _gyroSub = gyroscopeEvents.listen((GyroscopeEvent event) {
+      // summera rörelseenergi
+      final magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
+      _gyroMotion = (_gyroMotion * 0.9) + (magnitude * 0.1);
+
+      // om kameran rör sig rejält -> lås upp
+      if (_gyroMotion > 0.15 && _autoPause) {
+        _autoPause = false;
+        debugPrint("🔓 Rörelse upptäckt via gyro — scanning återupptas");
+      }
+    });
   }
 
   Future<void> _initializeCamera() async {
-    if (!(Platform.isIOS || Platform.isAndroid)) {
-      debugPrint("❌ Kamera stöds ej på denna plattform.");
-      return;
-    }
+    if (!(Platform.isIOS || Platform.isAndroid)) return;
 
     try {
       final camera = widget.cameras.first;
@@ -100,18 +118,10 @@ class _CameraScreenState extends State<CameraScreen> {
   void _processFrame(CameraImage image) {
     if (_manualPause || _autoPause || _isCaptured) return;
 
-    _frameCounter++;
-    bool shouldRebuild = _frameCounter % 2 == 0;
-
     if (Platform.isIOS && image.format.group == ImageFormatGroup.bgra8888) {
       final bytes = image.planes.first.bytes;
       final width = image.width;
       final height = image.height;
-
-      final int minY = (height * (1 - cameraVisibleFraction) / 2).toInt();
-      final int maxY = (height * (1 - (1 - cameraVisibleFraction) / 2)).toInt();
-      final int minX = (width * 0.1).toInt();
-      final int maxX = (width * 0.9).toInt();
 
       if (_positions.isEmpty) {
         for (int i = 0; i < _sampleCount; i++) {
@@ -121,81 +131,40 @@ class _CameraScreenState extends State<CameraScreen> {
       }
 
       final List<Color> newColors = List.from(_colors);
-      final List<Offset> newPositions = List.from(_positions);
       double totalChange = 0;
 
       for (int i = 0; i < _positions.length; i++) {
         final pos = _positions[i];
         int cx = (pos.dx * width).toInt();
         int cy = (pos.dy * height).toInt();
-        cx = cx.clamp(minX, maxX);
-        cy = cy.clamp(minY, maxY);
+        int idx = (cy * width + cx) * 4;
+        if (idx + 3 >= bytes.length) continue;
 
-        double bestScore = 0;
-        int bestX = cx;
-        int bestY = cy;
-        Color bestColor = _colors[i];
+        final b = bytes[idx];
+        final g = bytes[idx + 1];
+        final r = bytes[idx + 2];
+        final c = Color.fromARGB(255, r, g, b);
 
-        for (int dx = -20; dx <= 20; dx += 4) {
-          for (int dy = -20; dy <= 20; dy += 4) {
-            int nx = (cx + dx).clamp(minX, maxX);
-            int ny = (cy + dy).clamp(minY, maxY);
-            int idx = (ny * width + nx) * 4;
-            if (idx + 3 >= bytes.length) continue;
-
-            final b = bytes[idx];
-            final g = bytes[idx + 1];
-            final r = bytes[idx + 2];
-            double score = _colorInterest(r, g, b);
-            final c = Color.fromARGB(255, r, g, b);
-
-            for (int j = 0; j < _colors.length; j++) {
-              if (j == i) continue;
-              score -= max(0, 0.3 - _colorDistance(c, _colors[j])) * 1.5;
-            }
-
-            if (score > bestScore) {
-              bestScore = score;
-              bestX = nx;
-              bestY = ny;
-              bestColor = c;
-            }
-          }
-        }
-
-        double snapSpeed = min(1.0, max(0.6, bestScore));
-        Offset target = Offset(bestX / width, bestY / height);
-        newPositions[i] = Offset(
-          pos.dx + (target.dx - pos.dx) * snapSpeed,
-          pos.dy + (target.dy - pos.dy) * snapSpeed,
-        );
-        newColors[i] = Color.lerp(_colors[i], bestColor, 0.8)!;
-        totalChange += _colorDistance(_colors[i], newColors[i]);
+        totalChange += _colorDistance(_colors[i], c);
+        newColors[i] = Color.lerp(_colors[i], c, 0.6)!;
       }
 
       double avgChange = totalChange / _colors.length;
 
-      // 🔒 Pausa efter 3 sek stillhet
-      if (avgChange < 0.02) {
+      // stillhetslogik baserad på färgförändring
+      if (avgChange < 0.02 && _gyroMotion < 0.05) {
         _stillTimer += 0.1;
         if (_stillTimer > 3.0) {
           _autoPause = true;
           _stillTimer = 0;
-          debugPrint("⏸ Auto-paused efter stillhet");
+          debugPrint("⏸ Auto-pause (stillhet & ingen rörelse)");
         }
       } else {
         _stillTimer = 0;
       }
 
-      // 🔓 Starta igen om rörelse upptäcks
-      if (avgChange > 0.08 && _autoPause) {
-        _autoPause = false;
-        debugPrint("▶️ Rörelse upptäckt – fortsätter scanna");
-      }
-
-      _positions = newPositions;
       _colors = newColors;
-      if (shouldRebuild && mounted) setState(() {});
+      if (mounted) setState(() {});
     }
   }
 
@@ -207,19 +176,29 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _captureColors() async {
-    if (!_isInitialized) return;
-    setState(() {
-      _capturedColors = List.from(_colors);
-      _capturedPositions = List.from(_positions);
-      _isCaptured = true;
-    });
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text("📸 Färger fångade!")));
+    if (!_isInitialized || _controller == null) return;
+
+    try {
+      final xfile = await _controller!.takePicture();
+      final bytes = await File(xfile.path).readAsBytes();
+      final image = await decodeImageFromList(bytes);
+
+      setState(() {
+        _capturedImage = image;
+        _capturedColors = List.from(_colors);
+        _capturedPositions = List.from(_positions);
+        _isCaptured = true;
+      });
+      debugPrint("📸 Stillbild tagen och färger fångade");
+    } catch (e) {
+      debugPrint("❌ Kunde inte ta bild: $e");
+    }
   }
 
   void _resetCapture() {
     setState(() {
       _isCaptured = false;
+      _capturedImage = null;
       _capturedColors.clear();
       _capturedPositions.clear();
     });
@@ -227,16 +206,15 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   void dispose() {
+    _gyroSub?.cancel();
     _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final colorsToShow =
-        _isCaptured ? _capturedColors : _colors;
-    final positionsToShow =
-        _isCaptured ? _capturedPositions : _positions;
+    final colorsToShow = _isCaptured ? _capturedColors : _colors;
+    final positionsToShow = _isCaptured ? _capturedPositions : _positions;
 
     return GestureDetector(
       onTap: _toggleManualPause,
@@ -244,7 +222,15 @@ class _CameraScreenState extends State<CameraScreen> {
         backgroundColor: Colors.black,
         body: Stack(
           children: [
-            if (_isInitialized)
+            // Visa stillbild om tagen annars live
+            if (_isCaptured && _capturedImage != null)
+              Center(
+                child: CustomPaint(
+                  painter: _ImagePainter(_capturedImage!),
+                  child: Container(),
+                ),
+              )
+            else if (_isInitialized)
               FractionallySizedBox(
                 heightFactor: cameraVisibleFraction,
                 alignment: Alignment.topCenter,
@@ -253,7 +239,8 @@ class _CameraScreenState extends State<CameraScreen> {
             else
               const Center(child: CircularProgressIndicator(color: Colors.white)),
 
-            if (_isInitialized)
+            // färgprickar
+            if (_isInitialized || _isCaptured)
               LayoutBuilder(
                 builder: (context, constraints) {
                   return Stack(
@@ -288,12 +275,12 @@ class _CameraScreenState extends State<CameraScreen> {
                 },
               ),
 
-            // UI under kameran
+            // UI-knappar under kameran
             Align(
               alignment: Alignment.bottomCenter,
               child: Container(
-                height: MediaQuery.of(context).size.height *
-                    (1 - cameraVisibleFraction),
+                height:
+                    MediaQuery.of(context).size.height * (1 - cameraVisibleFraction),
                 color: Colors.black,
                 padding: const EdgeInsets.only(bottom: 40),
                 child: Center(
@@ -342,4 +329,19 @@ class _CameraScreenState extends State<CameraScreen> {
       ),
     );
   }
+}
+
+class _ImagePainter extends CustomPainter {
+  final ui.Image image;
+  _ImagePainter(this.image);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final src = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    final dst = Rect.fromLTWH(0, 0, size.width, size.height);
+    canvas.drawImageRect(image, src, dst, Paint());
+  }
+
+  @override
+  bool shouldRepaint(covariant _ImagePainter oldDelegate) => false;
 }
