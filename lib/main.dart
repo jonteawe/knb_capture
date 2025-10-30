@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 
 // 🔹 Importera rätt modulväg (den ligger i lib/screens/)
 import 'screens/camera_screen.dart';
@@ -8,10 +10,15 @@ import 'screens/camera_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initiera kameror innan appen startas.
+  // ✅ Initiera Firebase innan kamerorna laddas
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // ✅ Initiera kameror innan appen startas.
   final List<CameraDescription> cameras = await availableCameras();
 
-  // Kör appen och injicera kamerorna i huvudwidgeten.
+  // ✅ Kör appen och injicera kamerorna i huvudwidgeten.
   runApp(MyApp(cameras: cameras));
 }
 
