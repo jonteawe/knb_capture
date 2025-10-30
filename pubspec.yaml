@@ -10,13 +10,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  image_picker: ^1.0.4
-  palette_generator: ^0.3.3
-  camera_windows: ^0.2.6+2
+
+  # Kamera + sensorer
   camera: ^0.10.5
+  sensors_plus: ^5.0.0
+
+  # Filsystem & sökvägar
   path: ^1.8.3
   path_provider: ^2.1.1
-  sensors_plus: ^5.0.0   # 👈 Lagt till för gyroskopet
+
+  # Bildhantering (valfritt om du exporterar)
+  image_picker: ^1.0.4
 
 dev_dependencies:
   flutter_test:
