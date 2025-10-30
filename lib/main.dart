@@ -2,10 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
-import 'dart:ui' as ui;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,9 +21,9 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: "Knb Capture",
-      debugShowCheckedModeBanner: false,
+      title: 'Knb Capture',
       theme: ThemeData.dark(),
+      debugShowCheckedModeBanner: false,
       home: CameraScreen(cameras: cameras),
     );
   }
@@ -37,27 +38,51 @@ class CameraScreen extends StatefulWidget {
 }
 
 class _CameraScreenState extends State<CameraScreen> {
+  // ---------- T U N E A B L E S ----------
+  static const int kProbeCount = 5;
+
+  // UI layout (andel av hela höjden)
+  static const double kPaletteBarFrac = 0.14;   // topp-palett
+  static const double kBottomUIFrac  = 0.16;   // botten-kontroller
+  static const double kCameraFrac    = 1 - kPaletteBarFrac - kBottomUIFrac;
+
+  // Ikon/sond-utseende
+  static const double kProbeDiameter = 40;     // mindre, lik Adobe
+  static const double kMinProbeSepPx = 56;     // min inbördes avstånd
+
+  // Rörelse/sampling
+  static const double kScoreStep     = 4;      // sökgrid (px) ~ snabb
+  static const int    kSearchSize    = 20;     // ± radie (px)
+  static const double kSnapStrength  = 0.85;   // hur snabbt dras mot mål
+  static const double kColorLerp     = 0.8;    // färg-lågpass
+
+  // Auto-pause (mindre känslig)
+  static const double kAvgColorDeltaThresh = 0.015; // kräv liten färgförändring
+  static const double kGyroStillThresh     = 0.12;  // mindre känslig än tidigare
+  static const double kStillSecondsNeeded  = 3.0;
+
+  // ---------------------------------------
+
   CameraController? _controller;
   bool _isInitialized = false;
-  bool _isCaptured = false;
+
+  // pausflaggor och capture
   bool _manualPause = false;
-  bool _autoPause = false;
+  bool _autoPause   = false;
+  bool _isCaptured  = false;
 
   ui.Image? _capturedImage;
-
-  List<Color> _colors = [];
-  List<Offset> _positions = [];
   List<Color> _capturedColors = [];
   List<Offset> _capturedPositions = [];
 
-  final int _sampleCount = 5;
-  final Random _rand = Random();
-  final double cameraVisibleFraction = 0.80;
+  // live data
+  List<Color> _colors = [];
+  List<Offset> _positions = [];
 
-  // Gyro & stillhet
-  double _gyroMotion = 0;
-  double _stillTimer = 0;
+  // rörelsedetektion
   StreamSubscription? _gyroSub;
+  double _gyroMotion = 0.0;
+  double _stillTimer = 0.0;
 
   @override
   void initState() {
@@ -67,14 +92,14 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _listenGyro() {
-    _gyroSub = gyroscopeEvents.listen((GyroscopeEvent event) {
-      final magnitude =
-          sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
-      _gyroMotion = (_gyroMotion * 0.9) + (magnitude * 0.1);
+    _gyroSub = gyroscopeEvents.listen((e) {
+      final mag = sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
+      // kraftigare lågpass – jämnare
+      _gyroMotion = _gyroMotion * 0.92 + mag * 0.08;
 
-      if (_gyroMotion > 0.15 && _autoPause) {
-        _autoPause = false;
-        debugPrint("🔓 Rörelse upptäckt – scanning återupptas");
+      // om auto-paus aktiv och vi rör luren ordentligt -> återuppta
+      if (_autoPause && _gyroMotion > kGyroStillThresh * 1.25) {
+        setState(() => _autoPause = false);
       }
     });
   }
@@ -94,10 +119,17 @@ class _CameraScreenState extends State<CameraScreen> {
 
       await _controller!.initialize();
       await _controller!.startImageStream(_processFrame);
+
+      // initiera probers startlägen i mittenbandet
+      _positions = List.generate(
+        kProbeCount,
+        (i) => Offset(0.2 + i * (0.6 / (kProbeCount - 1)), 0.55),
+      );
+      _colors = List.generate(kProbeCount, (_) => Colors.transparent);
+
       setState(() => _isInitialized = true);
-      debugPrint("✅ Kamera initierad och aktiv.");
     } catch (e) {
-      debugPrint("❌ Fel vid initiering: $e");
+      debugPrint('❌ Kamera-fel: $e');
     }
   }
 
@@ -109,126 +141,174 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   double _colorInterest(int r, int g, int b) {
-    final double brightness = (r + g + b) / 3.0;
-    final double contrast = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
-    final double saturation = contrast / (brightness + 1);
+    final brightness = (r + g + b) / 3.0;
+    final contrast = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
+    final saturation = contrast / (brightness + 1);
+    // viktning: kontrast + mättnad + “mitt”-ljus
     return (contrast * 1.3 + saturation * 100 + (255 - (brightness - 128).abs())) / 510.0;
   }
 
   void _processFrame(CameraImage image) {
     if (_manualPause || _autoPause || _isCaptured) return;
-    if (Platform.isIOS && image.format.group == ImageFormatGroup.bgra8888) {
-      final bytes = image.planes.first.bytes;
-      final width = image.width;
-      final height = image.height;
+    if (!Platform.isIOS || image.format.group != ImageFormatGroup.bgra8888) {
+      return; // iOS-optimerad väg (BGRA)
+    }
 
-      if (_positions.isEmpty) {
-        for (int i = 0; i < _sampleCount; i++) {
-          _positions.add(Offset(_rand.nextDouble(), _rand.nextDouble() * 0.8));
-          _colors.add(Colors.transparent);
-        }
-      }
+    final bytes  = image.planes.first.bytes;
+    final width  = image.width;
+    final height = image.height;
 
-      final List<Color> newColors = List.from(_colors);
-      final List<Offset> newPositions = List.from(_positions);
+    // Beskär bort palett och botten-UI ur skanningen
+    final minY = (height * kPaletteBarFrac).toInt();
+    final maxY = (height * (kPaletteBarFrac + kCameraFrac)).toInt();
+    final minX = (width * 0.05).toInt();
+    final maxX = (width * 0.95).toInt();
 
-      double totalChange = 0;
+    final newColors    = List<Color>.from(_colors);
+    final newPositions = List<Offset>.from(_positions);
+    double totalDelta  = 0.0;
 
-      for (int i = 0; i < _positions.length; i++) {
-        final pos = _positions[i];
-        int cx = (pos.dx * width).toInt();
-        int cy = (pos.dy * height).toInt();
-        cx = cx.clamp(0, width - 1);
-        cy = cy.clamp(0, height - 1);
+    for (int i = 0; i < _positions.length; i++) {
+      final pos = _positions[i];
 
-        double bestScore = 0;
-        int bestX = cx;
-        int bestY = cy;
-        Color bestColor = _colors[i];
+      int cx = (pos.dx * width).toInt().clamp(minX, maxX);
+      int cy = (pos.dy * height).toInt().clamp(minY, maxY);
 
-        for (int dx = -20; dx <= 20; dx += 5) {
-          for (int dy = -20; dy <= 20; dy += 5) {
-            int nx = (cx + dx).clamp(0, width - 1);
-            int ny = (cy + dy).clamp(0, height - 1);
-            int idx = (ny * width + nx) * 4;
-            if (idx + 3 >= bytes.length) continue;
+      double bestScore = -1e9;
+      int bestX = cx, bestY = cy;
+      Color bestC = _colors[i];
 
-            final b = bytes[idx];
-            final g = bytes[idx + 1];
-            final r = bytes[idx + 2];
-            double score = _colorInterest(r, g, b);
+      for (int dx = -kSearchSize; dx <= kSearchSize; dx += kScoreStep.toInt()) {
+        for (int dy = -kSearchSize; dy <= kSearchSize; dy += kScoreStep.toInt()) {
+          final nx = (cx + dx).clamp(minX, maxX);
+          final ny = (cy + dy).clamp(minY, maxY);
+          final idx = (ny * width + nx) * 4;
+          if (idx + 3 >= bytes.length) continue;
 
-            final c = Color.fromARGB(255, r, g, b);
+          final b = bytes[idx];
+          final g = bytes[idx + 1];
+          final r = bytes[idx + 2];
+          final c = Color.fromARGB(255, r, g, b);
 
-            for (int j = 0; j < _colors.length; j++) {
-              if (j == i) continue;
-              score -= max(0, 0.3 - _colorDistance(c, _colors[j])) * 1.5;
-            }
+          double score = _colorInterest(r, g, b);
 
-            if (score > bestScore) {
-              bestScore = score;
-              bestX = nx;
-              bestY = ny;
-              bestColor = c;
-            }
+          // Undvik att flera väljer samma färg: öka spridning
+          for (int j = 0; j < _colors.length; j++) {
+            if (j == i) continue;
+            score -= max(0, 0.28 - _colorDistance(c, _colors[j])) * 1.7;
+          }
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestX = nx;
+            bestY = ny;
+            bestC = c;
           }
         }
-
-        double snapSpeed = min(1.0, max(0.6, bestScore));
-        Offset target = Offset(bestX / width, bestY / height);
-        newPositions[i] = Offset(
-          pos.dx + (target.dx - pos.dx) * snapSpeed,
-          pos.dy + (target.dy - pos.dy) * snapSpeed,
-        );
-        newColors[i] = Color.lerp(_colors[i], bestColor, 0.8)!;
-
-        totalChange += _colorDistance(_colors[i], newColors[i]);
       }
 
-      double avgChange = totalChange / _colors.length;
+      // snabb, men mjuk “snap” mot mål
+      final tgt = Offset(bestX / width, bestY / height);
+      final lerp = kSnapStrength;
+      newPositions[i] = Offset(
+        pos.dx + (tgt.dx - pos.dx) * lerp,
+        pos.dy + (tgt.dy - pos.dy) * lerp,
+      );
 
-      if (avgChange < 0.02 && _gyroMotion < 0.05) {
-        _stillTimer += 0.1;
-        if (_stillTimer > 3.0) {
-          _autoPause = true;
-          _stillTimer = 0;
-          debugPrint("⏸ Auto-paus (kameran stilla)");
-        }
-      } else {
+      // färg-lågpass
+      final oldC = _colors[i];
+      final outC = Color.lerp(oldC, bestC, kColorLerp)!;
+      newColors[i] = outC;
+
+      // för stillhetsdetektion
+      totalDelta += _colorDistance(oldC, outC);
+    }
+
+    // inbördes repulsion + clamp inom skanningsfönster
+    _applyRepulsionAndClamp(newPositions);
+
+    // uppdatera
+    _positions = newPositions;
+    _colors    = newColors;
+    if (mounted) setState(() {});
+
+    // auto-pause om nästan stilla (färgmässigt + gyro)
+    final avgDelta = totalDelta / _colors.length.clamp(1, 999);
+    if (avgDelta < kAvgColorDeltaThresh && _gyroMotion < kGyroStillThresh) {
+      _stillTimer += 0.1; // ~ var 100 ms
+      if (_stillTimer >= kStillSecondsNeeded) {
+        _autoPause = true;
         _stillTimer = 0;
       }
-
-      _positions = newPositions;
-      _colors = newColors;
-
-      if (mounted) setState(() {});
+    } else {
+      _stillTimer = 0;
     }
   }
 
+  void _applyRepulsionAndClamp(List<Offset> pos) {
+    // repulsion i pixelkoordinater
+    for (int iter = 0; iter < 2; iter++) {
+      for (int i = 0; i < pos.length; i++) {
+        for (int j = i + 1; j < pos.length; j++) {
+          final p1 = pos[i];
+          final p2 = pos[j];
+
+          // räkna i “skanningsytans” pixelrum (höjd=bart kCameraFrac)
+          final size = MediaQuery.of(context).size;
+          final wPx = size.width;
+          final hPx = size.height * kCameraFrac;
+
+          final dx = (p2.dx - p1.dx) * wPx;
+          final dy = (p2.dy - p1.dy) * hPx;
+          final dist = sqrt(dx * dx + dy * dy);
+
+          if (dist < kMinProbeSepPx && dist > 0) {
+            final push = (kMinProbeSepPx - dist) / kMinProbeSepPx * 0.35;
+            final nx = dx / dist, ny = dy / dist;
+            // flytta isär i normaliserade koordinater
+            pos[i] = Offset(
+              (p1.dx - nx * push / wPx).clamp(0.0, 1.0),
+              (p1.dy - ny * push / hPx).clamp(0.0, 1.0),
+            );
+            pos[j] = Offset(
+              (p2.dx + nx * push / wPx).clamp(0.0, 1.0),
+              (p2.dy + ny * push / hPx).clamp(0.0, 1.0),
+            );
+          }
+        }
+      }
+    }
+
+    // clampa inom skanningsfönstret (normaliserat)
+    for (int i = 0; i < pos.length; i++) {
+      pos[i] = Offset(
+        pos[i].dx.clamp(0.05, 0.95),
+        pos[i].dy.clamp(kPaletteBarFrac + 0.02, kPaletteBarFrac + kCameraFrac - 0.02),
+      );
+    }
+  }
+
+  // ----- UI-händelser -----
+
   void _toggleManualPause() {
-    setState(() {
-      _manualPause = !_manualPause;
-      debugPrint(_manualPause ? "🧊 Manuell paus" : "▶️ Fortsätter skanna");
-    });
+    setState(() => _manualPause = !_manualPause);
   }
 
   Future<void> _captureColors() async {
     if (!_isInitialized || _controller == null) return;
-
     try {
       final xfile = await _controller!.takePicture();
       final bytes = await File(xfile.path).readAsBytes();
-      final image = await decodeImageFromList(bytes);
+      final img   = await decodeImageFromList(bytes);
 
       setState(() {
-        _capturedImage = image;
-        _capturedColors = List.from(_colors);
-        _capturedPositions = List.from(_positions);
-        _isCaptured = true;
+        _capturedImage    = img;
+        _capturedColors   = List.from(_colors);
+        _capturedPositions= List.from(_positions);
+        _isCaptured       = true;
       });
-      debugPrint("📸 Stillbild tagen och färger låsta");
     } catch (e) {
-      debugPrint("❌ Kunde inte ta bild: $e");
+      debugPrint('❌ takePicture error: $e');
     }
   }
 
@@ -238,6 +318,8 @@ class _CameraScreenState extends State<CameraScreen> {
       _capturedImage = null;
       _capturedColors.clear();
       _capturedPositions.clear();
+      _manualPause = false;
+      _autoPause   = false;
     });
   }
 
@@ -248,10 +330,12 @@ class _CameraScreenState extends State<CameraScreen> {
     super.dispose();
   }
 
+  // ----- R E N D E R -----
+
   @override
   Widget build(BuildContext context) {
-    final colorsToShow = _isCaptured ? _capturedColors : _colors;
-    final positionsToShow = _isCaptured ? _capturedPositions : _positions;
+    final showingColors   = _isCaptured ? _capturedColors   : _colors;
+    final showingPositions= _isCaptured ? _capturedPositions: _positions;
 
     return GestureDetector(
       onTap: _toggleManualPause,
@@ -259,50 +343,56 @@ class _CameraScreenState extends State<CameraScreen> {
         backgroundColor: Colors.black,
         body: Column(
           children: [
-            // 📸 Kamera-del (80%)
+            // TOPP: Palett (utanför kameran)
+            _PaletteBar(colors: showingColors),
+
+            // MITT: Kamera eller stillbild + prober
             Expanded(
-              flex: 8,
+              flex: (kCameraFrac * 1000).round(),
               child: Stack(
+                fit: StackFit.expand,
                 children: [
                   if (_isCaptured && _capturedImage != null)
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: _ImagePainter(_capturedImage!),
-                      ),
-                    )
+                    CustomPaint(painter: _ImagePainter(_capturedImage!))
                   else if (_isInitialized)
-                    Positioned.fill(
-                      child: CameraPreview(_controller!),
-                    )
+                    CameraPreview(_controller!)
                   else
                     const Center(
-                        child: CircularProgressIndicator(color: Colors.white)),
+                      child: CircularProgressIndicator(color: Colors.white),
+                    ),
 
+                  // Proberna – håll dem inom “mitt”-ytan
                   if (_isInitialized || _isCaptured)
                     LayoutBuilder(
                       builder: (context, constraints) {
+                        final w = constraints.maxWidth;
+                        final h = constraints.maxHeight;
                         return Stack(
-                          children: List.generate(colorsToShow.length, (i) {
-                            if (i >= positionsToShow.length) return const SizedBox();
-                            final pos = positionsToShow[i];
-                            final dx = pos.dx * constraints.maxWidth;
-                            final dy = pos.dy * constraints.maxHeight;
+                          children: List.generate(showingPositions.length, (i) {
+                            final pos = showingPositions[i];
+                            // mappa normaliserad pos till mitt-ytan
+                            final nx = pos.dx;
+                            final ny = (pos.dy - kPaletteBarFrac) / kCameraFrac;
+                            final dx = nx * w;
+                            final dy = ny * h;
                             return Positioned(
-                              left: dx.clamp(0, constraints.maxWidth - 50),
-                              top: dy.clamp(0, constraints.maxHeight - 50),
+                              left: dx - kProbeDiameter / 2,
+                              top:  dy - kProbeDiameter / 2,
                               child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 33),
-                                width: 50,
-                                height: 50,
+                                duration: const Duration(milliseconds: 20),
+                                width:  kProbeDiameter,
+                                height: kProbeDiameter,
                                 decoration: BoxDecoration(
-                                  color: colorsToShow[i],
+                                  color: showingColors.isNotEmpty
+                                      ? showingColors[i]
+                                      : Colors.transparent,
                                   shape: BoxShape.circle,
                                   border: Border.all(color: Colors.white, width: 2),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withOpacity(0.4),
+                                      color: Colors.black.withOpacity(0.35),
                                       blurRadius: 6,
-                                    ),
+                                    )
                                   ],
                                 ),
                               ),
@@ -315,76 +405,103 @@ class _CameraScreenState extends State<CameraScreen> {
               ),
             ),
 
-            // 🎨 UI-del (20%)
-            Expanded(
-              flex: 2,
-              child: Container(
-                color: Colors.black,
-                padding: const EdgeInsets.only(bottom: 25),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // Färgpalett
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: _colors
-                          .map(
-                            (c) => Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 6),
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: c,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white, width: 2),
-                              ),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                    // Knappar
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        ElevatedButton(
-                          onPressed: _isCaptured ? null : _captureColors,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: Colors.black,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 30, vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(30),
-                            ),
-                          ),
-                          child: const Text(
-                            "Capture Colors",
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        const SizedBox(width: 20),
-                        if (_isCaptured)
-                          ElevatedButton(
-                            onPressed: _resetCapture,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.grey[300],
-                              foregroundColor: Colors.black,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 20, vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(30),
-                              ),
-                            ),
-                            child: const Text("Reset"),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+            // BOTTEN: kontroller (utanför kameran)
+            _BottomBar(
+              onCapture: _isCaptured ? null : _captureColors,
+              onReset:   _isCaptured ? _resetCapture : null,
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------- W I D G E T S ----------------
+
+class _PaletteBar extends StatelessWidget {
+  const _PaletteBar({required this.colors});
+  final List<Color> colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = (colors.isEmpty ? List<Color>.filled(5, Colors.transparent) : colors)
+        .take(5)
+        .toList()
+      ..addAll(List<Color>.filled(max(0, 5 - (colors.length)), Colors.transparent));
+
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * _CameraScreenState.kPaletteBarFrac,
+      child: Container(
+        color: Colors.black,
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: items.map((c) {
+            return Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: c,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withOpacity(0.9), width: 1.2),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+}
+
+class _BottomBar extends StatelessWidget {
+  const _BottomBar({this.onCapture, this.onReset});
+  final VoidCallback? onCapture;
+  final VoidCallback? onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * _CameraScreenState.kBottomUIFrac,
+      child: Container(
+        color: Colors.black,
+        padding: const EdgeInsets.only(bottom: 28),
+        child: Center(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ElevatedButton(
+                onPressed: onCapture,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(30)),
+                ),
+                child: const Text(
+                  'Capture Colors',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(width: 18),
+              if (onReset != null)
+                ElevatedButton(
+                  onPressed: onReset,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.grey[300],
+                    foregroundColor: Colors.black,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30)),
+                  ),
+                  child: const Text('Reset'),
+                ),
+            ],
+          ),
         ),
       ),
     );
