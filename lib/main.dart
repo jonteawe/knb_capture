@@ -4,15 +4,20 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 
-// 🔹 Importera rätt modulvägar
 import 'screens/camera_screen.dart';
 import 'screens/auth_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    print('✅ Firebase initialized successfully');
+  } catch (e) {
+    print('❌ Firebase init failed: $e');
+  }
 
   final cameras = await availableCameras();
   runApp(MyApp(cameras: cameras));
@@ -32,13 +37,13 @@ class MyApp extends StatelessWidget {
         stream: FirebaseAuth.instance.authStateChanges(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
           }
           if (snapshot.hasData) {
-            // 🔹 Om användaren redan är inloggad
             return CameraScreen(cameras: cameras);
           }
-          // 🔹 Om användaren ej är inloggad
           return const AuthScreen();
         },
       ),

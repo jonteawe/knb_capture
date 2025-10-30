@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:camera/camera.dart';
+import 'camera_screen.dart'; // 🔹 lägg till denna import
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -14,22 +16,46 @@ class _AuthScreenState extends State<AuthScreen> {
   final _passwordController = TextEditingController();
   bool _isLogin = true;
   String _errorMessage = '';
+  bool _isLoading = false; // 🔹 Ny: visar när appen jobbar
 
   Future<void> _submit() async {
+    setState(() {
+      _errorMessage = '';
+      _isLoading = true;
+    });
+
     try {
       if (_isLogin) {
         await _auth.signInWithEmailAndPassword(
           email: _emailController.text.trim(),
           password: _passwordController.text.trim(),
         );
+        print('✅ Login success');
       } else {
         await _auth.createUserWithEmailAndPassword(
           email: _emailController.text.trim(),
           password: _passwordController.text.trim(),
         );
+        print('✅ Account created');
+      }
+
+      // 🔹 Navigera till kamera-skärmen direkt efter login/signup
+      final cameras = await availableCameras();
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => CameraScreen(cameras: cameras),
+          ),
+        );
       }
     } on FirebaseAuthException catch (e) {
+      print('🔥 FirebaseAuth error: ${e.code} - ${e.message}');
       setState(() => _errorMessage = e.message ?? 'Auth error');
+    } catch (e) {
+      print('❌ Unknown error: $e');
+      setState(() => _errorMessage = 'Unexpected error: $e');
+    } finally {
+      setState(() => _isLoading = false);
     }
   }
 
@@ -73,15 +99,24 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
                 const SizedBox(height: 20),
                 if (_errorMessage.isNotEmpty)
-                  Text(_errorMessage, style: const TextStyle(color: Colors.red)),
-                const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: _submit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueAccent,
+                  Text(
+                    _errorMessage,
+                    style: const TextStyle(color: Colors.red),
+                    textAlign: TextAlign.center,
                   ),
-                  child: Text(_isLogin ? 'Logga in' : 'Skapa konto'),
-                ),
+                const SizedBox(height: 20),
+
+                // 🔹 Laddningsindikator eller knapp
+                _isLoading
+                    ? const CircularProgressIndicator(color: Colors.blueAccent)
+                    : ElevatedButton(
+                        onPressed: _submit,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blueAccent,
+                        ),
+                        child: Text(_isLogin ? 'Logga in' : 'Skapa konto'),
+                      ),
+
                 TextButton(
                   onPressed: () =>
                       setState(() => _isLogin = !_isLogin),
