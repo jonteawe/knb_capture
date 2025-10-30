@@ -1,30 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 
-// 🔹 Importera rätt modulväg (den ligger i lib/screens/)
+// 🔹 Importera rätt modulvägar
 import 'screens/camera_screen.dart';
+import 'screens/auth_screen.dart';
 
-/// Startpunkt för hela Knb Capture-appen.
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // ✅ Initiera Firebase innan kamerorna laddas
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // ✅ Initiera kameror innan appen startas.
-  final List<CameraDescription> cameras = await availableCameras();
-
-  // ✅ Kör appen och injicera kamerorna i huvudwidgeten.
+  final cameras = await availableCameras();
   runApp(MyApp(cameras: cameras));
 }
 
 class MyApp extends StatelessWidget {
   final List<CameraDescription> cameras;
-
   const MyApp({super.key, required this.cameras});
 
   @override
@@ -33,8 +28,20 @@ class MyApp extends StatelessWidget {
       title: 'Knb Capture',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(),
-      // Skicka kameradata till din huvudskärm
-      home: CameraScreen(cameras: cameras),
+      home: StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasData) {
+            // 🔹 Om användaren redan är inloggad
+            return CameraScreen(cameras: cameras);
+          }
+          // 🔹 Om användaren ej är inloggad
+          return const AuthScreen();
+        },
+      ),
     );
   }
 }
