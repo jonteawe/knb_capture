@@ -57,8 +57,8 @@ class _CameraScreenState extends State<CameraScreen> {
   static const double kColorLerp     = 0.8;    // färg-lågpass
 
   // Auto-pause (mindre känslig)
-  static const double kAvgColorDeltaThresh = 0.015; // kräv liten färgförändring
-  static const double kGyroStillThresh     = 0.12;  // mindre känslig än tidigare
+  static const double kAvgColorDeltaThresh = 0.010; // kräver ännu mindre färgförändring
+  static const double kGyroStillThresh     = 0.20;  // ~70% trögare på rörelse
   static const double kStillSecondsNeeded  = 3.0;
 
   // ---------------------------------------
@@ -209,7 +209,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
       // snabb, men mjuk “snap” mot mål
       final tgt = Offset(bestX / width, bestY / height);
-      final lerp = kSnapStrength;
+      const lerp = kSnapStrength;
       newPositions[i] = Offset(
         pos.dx + (tgt.dx - pos.dx) * lerp,
         pos.dy + (tgt.dy - pos.dy) * lerp,
