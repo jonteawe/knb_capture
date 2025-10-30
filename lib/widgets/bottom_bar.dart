@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 
-/// Nedersta kontrollfältet i kameravyn.
-/// Innehåller knappar för att fånga färger och återställa.
 class BottomBar extends StatelessWidget {
   const BottomBar({
     super.key,
     this.onCapture,
     this.onReset,
+    this.onToggleFlash,
+    this.isFlashOn = false,
   });
 
   final VoidCallback? onCapture;
   final VoidCallback? onReset;
+  final VoidCallback? onToggleFlash;
+  final bool isFlashOn;
 
   @override
   Widget build(BuildContext context) {
@@ -23,7 +25,18 @@ class BottomBar extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Capture-knapp
+              // 🔦 Flash toggle button
+              IconButton(
+                onPressed: onToggleFlash,
+                icon: Icon(
+                  isFlashOn ? Icons.flash_on : Icons.flash_off,
+                  color: Colors.white,
+                  size: 30,
+                ),
+              ),
+              const SizedBox(width: 16),
+
+              // 📸 Capture button
               ElevatedButton(
                 onPressed: onCapture,
                 style: ElevatedButton.styleFrom(
@@ -48,7 +61,7 @@ class BottomBar extends StatelessWidget {
 
               const SizedBox(width: 18),
 
-              // Reset-knapp (visas bara när aktiv)
+              // 🔁 Reset button
               if (onReset != null)
                 ElevatedButton(
                   onPressed: onReset,

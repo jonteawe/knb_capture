@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:flutter/services.dart';
 
 import '../services/camera_service.dart';
 import '../services/sensor_service.dart';
@@ -53,6 +54,8 @@ class _CameraScreenState extends State<CameraScreen> {
 
   double _gyroMotion = 0.0;
   double _stillTimer = 0.0;
+  FlashMode _flashMode = FlashMode.off;
+
   late SensorService _sensorService;
 
   @override
@@ -74,6 +77,7 @@ class _CameraScreenState extends State<CameraScreen> {
     try {
       _controller = await CameraService.initializeCamera(widget.cameras);
       await _controller!.startImageStream(_processFrame);
+      await _controller!.setFlashMode(_flashMode);
 
       _positions = List.generate(
         kProbeCount,
@@ -84,6 +88,22 @@ class _CameraScreenState extends State<CameraScreen> {
       setState(() => _isInitialized = true);
     } catch (e) {
       debugPrint('❌ Kamera-fel: $e');
+    }
+  }
+
+  // 🔦 Flash toggle
+  Future<void> _toggleFlash() async {
+    if (_controller == null) return;
+
+    setState(() {
+      _flashMode = _flashMode == FlashMode.off ? FlashMode.torch : FlashMode.off;
+    });
+
+    try {
+      await _controller!.setFlashMode(_flashMode);
+      debugPrint('🔦 Flash mode: $_flashMode');
+    } catch (e) {
+      debugPrint('⚠️ Kunde inte ändra flashläge: $e');
     }
   }
 
@@ -230,6 +250,7 @@ class _CameraScreenState extends State<CameraScreen> {
   Future<void> _captureColors() async {
     if (!_isInitialized || _controller == null) return;
     try {
+      await _controller!.setFlashMode(_flashMode);
       final xfile = await _controller!.takePicture();
       final bytes = await File(xfile.path).readAsBytes();
       final img = await decodeImageFromList(bytes);
@@ -332,6 +353,8 @@ class _CameraScreenState extends State<CameraScreen> {
             BottomBar(
               onCapture: _isCaptured ? null : _captureColors,
               onReset: _isCaptured ? _resetCapture : null,
+              onToggleFlash: _toggleFlash,
+              isFlashOn: _flashMode == FlashMode.torch,
             ),
           ],
         ),
