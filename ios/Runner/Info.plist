@@ -46,6 +46,20 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Appen behöver tillgång till bildbiblioteket för att visa sparade bilder.</string>
 
+	<!-- 🔄 Gyroskop / rörelsesensor -->
+	<key>NSMotionUsageDescription</key>
+	<string>Appen använder rörelsesensorn (gyroskop) för att upptäcka kamerarörelser.</string>
+
+	<!-- 🌐 Firebase & nätverksåtkomst -->
+	<key>FirebaseAppDelegateProxyEnabled</key>
+	<true/>
+
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+
 	<!-- 📱 Gränssnitt -->
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
@@ -73,9 +87,5 @@
 
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-
-	<!-- 🔄 Gyroskop / rörelsesensor -->
-	<key>NSMotionUsageDescription</key>
-	<string>Appen använder rörelsesensorn (gyroskop) för att upptäcka kamerarörelser.</string>
 </dict>
 </plist>
