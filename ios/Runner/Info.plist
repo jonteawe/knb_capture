@@ -54,6 +54,10 @@
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<true/>
 
+	<!-- 📄 Tillfällig fillagring för att spara färgpaletter -->
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Appen behöver tillgång till lokala filer för att skapa och ladda upp färgdata.</string>
+
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

@@ -5,10 +5,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // 🔹 lagt till för logout
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../services/camera_service.dart';
 import '../services/sensor_service.dart';
+import '../services/color_save_service.dart'; // 🔹 Ny modul för att spara färger
 import '../widgets/palette_bar.dart';
 import '../widgets/bottom_bar.dart';
 import '../widgets/image_painter.dart';
@@ -90,7 +91,6 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  // 🔦 Flash toggle
   Future<void> _toggleFlash() async {
     if (_controller == null) return;
 
@@ -292,8 +292,6 @@ class _CameraScreenState extends State<CameraScreen> {
       onTap: _toggleManualPause,
       child: Scaffold(
         backgroundColor: Colors.black,
-
-        // 🔹 Hamburgermenyn här
         appBar: AppBar(
           title: const Text('Knb Capture'),
           backgroundColor: Colors.black,
@@ -305,8 +303,6 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
           ),
         ),
-
-        // 🔹 Själva menyn
         drawer: Drawer(
           backgroundColor: Colors.grey[900],
           child: ListView(
@@ -335,15 +331,13 @@ class _CameraScreenState extends State<CameraScreen> {
                 onTap: () async {
                   await FirebaseAuth.instance.signOut();
                   if (mounted) {
-                    Navigator.of(context).pushReplacementNamed('/'); // Går tillbaka till AuthScreen
+                    Navigator.of(context).pushReplacementNamed('/');
                   }
                 },
               ),
             ],
           ),
         ),
-
-        // 🔹 Resten av kameravyn
         body: Column(
           children: [
             PaletteBar(colors: showingColors),
@@ -401,6 +395,18 @@ class _CameraScreenState extends State<CameraScreen> {
                 ],
               ),
             ),
+            if (_isCaptured)
+              Padding(
+                padding: const EdgeInsets.all(10.0),
+                child: ElevatedButton.icon(
+                  onPressed: () => ColorSaveService.saveColorsToFirebase(context, _capturedColors),
+                  icon: const Icon(Icons.cloud_upload),
+                  label: const Text('Save Colors to Cloud'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueAccent,
+                  ),
+                ),
+              ),
             BottomBar(
               onCapture: _isCaptured ? null : _captureColors,
               onReset: _isCaptured ? _resetCapture : null,
