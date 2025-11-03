@@ -1,12 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // 🔹 lagt till för logout
 
 import '../services/camera_service.dart';
 import '../services/sensor_service.dart';
@@ -293,6 +292,58 @@ class _CameraScreenState extends State<CameraScreen> {
       onTap: _toggleManualPause,
       child: Scaffold(
         backgroundColor: Colors.black,
+
+        // 🔹 Hamburgermenyn här
+        appBar: AppBar(
+          title: const Text('Knb Capture'),
+          backgroundColor: Colors.black,
+          elevation: 0,
+          leading: Builder(
+            builder: (context) => IconButton(
+              icon: const Icon(Icons.menu),
+              onPressed: () => Scaffold.of(context).openDrawer(),
+            ),
+          ),
+        ),
+
+        // 🔹 Själva menyn
+        drawer: Drawer(
+          backgroundColor: Colors.grey[900],
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              DrawerHeader(
+                decoration: const BoxDecoration(color: Colors.blueAccent),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: const [
+                    Text(
+                      'Knb Capture',
+                      style: TextStyle(color: Colors.white, fontSize: 22),
+                    ),
+                    Text(
+                      'Användarmeny',
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.logout, color: Colors.white),
+                title: const Text('Logga ut', style: TextStyle(color: Colors.white)),
+                onTap: () async {
+                  await FirebaseAuth.instance.signOut();
+                  if (mounted) {
+                    Navigator.of(context).pushReplacementNamed('/'); // Går tillbaka till AuthScreen
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+
+        // 🔹 Resten av kameravyn
         body: Column(
           children: [
             PaletteBar(colors: showingColors),
