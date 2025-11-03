@@ -332,30 +332,36 @@ class _CameraScreenState extends State<CameraScreen> {
         ),
 
         // 🔹 Resten av kameravyn
-        body: Column(
+              body: Column(
           children: [
+            // 🔸 Palett-bar högst upp (ovanpå kameran)
             PaletteBar(colors: showingColors),
+
+            // 🔸 Kamerasektion (endast i mitten av skärmen)
             Expanded(
               flex: (kCameraFrac * 1000).round(),
               child: Stack(
-                fit: StackFit.expand,
                 children: [
+                  // 🔹 Kamerabilden – croppad & korrekt proportion
                   if (_isCaptured && _capturedImage != null)
                     CustomPaint(painter: ImagePainter(_capturedImage!))
                   else if (_isInitialized)
-                    // 🔹 Korrigerad kamera-visning (ej stretchad)
-                    FittedBox(
-                      fit: BoxFit.cover,
-                      child: SizedBox(
-                        width: _controller!.value.previewSize!.height,
-                        height: _controller!.value.previewSize!.width,
-                        child: CameraPreview(_controller!),
+                    ClipRect(
+                      child: FittedBox(
+                        fit: BoxFit.cover,
+                        child: SizedBox(
+                          width: _controller!.value.previewSize!.height,
+                          height: _controller!.value.previewSize!.width,
+                          child: CameraPreview(_controller!),
+                        ),
                       ),
                     )
                   else
                     const Center(
                       child: CircularProgressIndicator(color: Colors.white),
                     ),
+
+                  // 🔹 Prober och overlays ovanpå kameran (ej bakom)
                   if (_isInitialized || _isCaptured)
                     LayoutBuilder(
                       builder: (context, constraints) {
@@ -380,7 +386,8 @@ class _CameraScreenState extends State<CameraScreen> {
                                       ? showingColors[i]
                                       : Colors.transparent,
                                   shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white, width: 2),
+                                  border:
+                                      Border.all(color: Colors.white, width: 2),
                                   boxShadow: [
                                     BoxShadow(
                                       color: Colors.black.withOpacity(0.35),
@@ -397,6 +404,8 @@ class _CameraScreenState extends State<CameraScreen> {
                 ],
               ),
             ),
+
+            // 🔸 Nedersta UI:n (knappar etc.)
             BottomBar(
               onCapture: _isCaptured ? null : _captureColors,
               onReset: _isCaptured ? _resetCapture : null,
