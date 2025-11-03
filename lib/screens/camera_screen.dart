@@ -342,20 +342,35 @@ class _CameraScreenState extends State<CameraScreen> {
                   // 🔹 Kamerabilden – croppad, centrerad och rätt roterad
                   if (_isCaptured && _capturedImage != null)
                     CustomPaint(painter: ImagePainter(_capturedImage!))
-                  else if (_isInitialized)
-                    ClipRect(
-                      child: FittedBox(
-                        fit: BoxFit.cover,
-                        child: SizedBox(
-                          width: _controller!.value.previewSize!.height,
-                          height: _controller!.value.previewSize!.width,
-                          child: Transform.rotate(
-                            alignment: Alignment.center, // 🔹 centrerar rotationen
-                            angle: Platform.isIOS ? -pi / 2 : 0,
-                            child: CameraPreview(_controller!),
+                 else if (_isInitialized)
+                    // Crop to the camera area without stretching and without rotating.
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final containerW = constraints.maxWidth;
+                        final containerH = constraints.maxHeight;
+                        final containerAspect = containerW / containerH;
+
+                        // On iOS in portrait, previewSize is reported as landscape (w>h).
+                        final preview = _controller!.value.previewSize!;
+                        final previewAspect = preview.height / preview.width; // portrait aspect
+
+                        // Scale so the preview fully covers the container (like BoxFit.cover),
+                        // then clip away the overflow so no black bars appear.
+                        final scale = (previewAspect / containerAspect);
+                        final safeScale = scale < 1 ? 1.0 : scale;
+
+                        return ClipRect(
+                          child: Transform.scale(
+                            scale: safeScale,
+                            child: Center(
+                              child: AspectRatio(
+                                aspectRatio: previewAspect,
+                                child: CameraPreview(_controller!),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
+                        );
+                      },
                     )
                   else
                     const Center(
