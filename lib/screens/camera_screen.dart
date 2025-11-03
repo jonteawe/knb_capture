@@ -128,8 +128,14 @@ class _CameraScreenState extends State<CameraScreen> {
     final width = image.width;
     final height = image.height;
 
-    final minY = (height * kPaletteBarFrac).toInt();
-    final maxY = (height * (kPaletteBarFrac + kCameraFrac)).toInt();
+    // --- ✅ Begränsa skanningsområdet till synlig kamerazony ---
+    // (dvs mellan palettbaren och bottombaren)
+    const visibleTopFrac = kPaletteBarFrac;
+    const visibleHeightFrac = kCameraFrac;
+
+    final minY = (height * visibleTopFrac).toInt();
+    final maxY = (height * (visibleTopFrac + visibleHeightFrac)).toInt();
+
     final minX = (width * 0.05).toInt();
     final maxX = (width * 0.95).toInt();
 
@@ -140,8 +146,14 @@ class _CameraScreenState extends State<CameraScreen> {
     for (int i = 0; i < _positions.length; i++) {
       final pos = _positions[i];
 
+      // X: vanlig skala 0..1 -> 0..width
       int cx = (pos.dx * width).toInt().clamp(minX, maxX);
-      int cy = (pos.dy * height).toInt().clamp(minY, maxY);
+
+      // Y: mappa 0..1 (globala normaliserade) till endast synliga mittzonen
+      // pos.dy ligger 0..1 där den synliga zonen är [visibleTopFrac .. visibleTopFrac+visibleHeightFrac]
+      final ny01 = ((pos.dy - visibleTopFrac) / visibleHeightFrac)
+          .clamp(0.0, 1.0);
+      int cy = (ny01 * height).toInt().clamp(minY, maxY);
 
       double bestScore = -1e9;
       int bestX = cx, bestY = cy;
@@ -339,36 +351,60 @@ class _CameraScreenState extends State<CameraScreen> {
               flex: (kCameraFrac * 1000).round(),
               child: Stack(
                 children: [
-                  // 🔹 Kamerabilden – croppad, centrerad och rätt roterad
+                  // 🔹 Kamerabilden – croppad, centrerad
                   if (_isCaptured && _capturedImage != null)
                     CustomPaint(painter: ImagePainter(_capturedImage!))
-                 else if (_isInitialized)
-                    // Crop to the camera area without stretching and without rotating.
+                  else if (_isInitialized)
                     LayoutBuilder(
                       builder: (context, constraints) {
                         final containerW = constraints.maxWidth;
                         final containerH = constraints.maxHeight;
-                        final containerAspect = containerW / containerH;
 
-                        // On iOS in portrait, previewSize is reported as landscape (w>h).
+                        // previewSize är landscape på iOS
                         final preview = _controller!.value.previewSize!;
-                        final previewAspect = preview.height / preview.width; // portrait aspect
+                        final previewAspect =
+                            preview.height / preview.width; // Portrait ratio
+                        final containerAspect =
+                            containerH > 0 ? containerW / containerH : 1.0;
 
-                        // Scale so the preview fully covers the container (like BoxFit.cover),
-                        // then clip away the overflow so no black bars appear.
-                        final scale = (previewAspect / containerAspect);
-                        final safeScale = scale < 1 ? 1.0 : scale;
+                        // BoxFit.cover – skala uniformt från mitten så att bilden täcker helt
+                        double scale = previewAspect / containerAspect;
+                        if (scale < 1) scale = 1 / scale;
 
-                        return ClipRect(
-                          child: Transform.scale(
-                            scale: safeScale,
-                            child: Center(
-                              child: AspectRatio(
-                                aspectRatio: previewAspect,
-                                child: CameraPreview(_controller!),
+                        // UI-zoner för mask (visuellt)
+                        final screenH = MediaQuery.of(context).size.height;
+                        final topCut = screenH * kPaletteBarFrac;
+                        final bottomCut = screenH * kBottomUIFrac;
+
+                        return Stack(
+                          children: [
+                            ClipRect(
+                              child: Transform.scale(
+                                scale: scale,
+                                alignment: Alignment.center,
+                                child: Center(
+                                  child: AspectRatio(
+                                    aspectRatio: previewAspect,
+                                    child: CameraPreview(_controller!),
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
+                            Positioned(
+                              top: 0,
+                              left: 0,
+                              right: 0,
+                              height: topCut,
+                              child: Container(color: Colors.black),
+                            ),
+                            Positioned(
+                              bottom: 0,
+                              left: 0,
+                              right: 0,
+                              height: bottomCut,
+                              child: Container(color: Colors.black),
+                            ),
+                          ],
                         );
                       },
                     )
@@ -387,14 +423,16 @@ class _CameraScreenState extends State<CameraScreen> {
                           children: List.generate(showingPositions.length, (i) {
                             final pos = showingPositions[i];
                             final nx = pos.dx;
-                            final ny = (pos.dy - kPaletteBarFrac) / kCameraFrac;
+                            final ny =
+                                (pos.dy - kPaletteBarFrac) / kCameraFrac;
                             final dx = nx * w;
                             final dy = ny * h;
                             return Positioned(
                               left: dx - kProbeDiameter / 2,
                               top: dy - kProbeDiameter / 2,
                               child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 20),
+                                duration:
+                                    const Duration(milliseconds: 20),
                                 width: kProbeDiameter,
                                 height: kProbeDiameter,
                                 decoration: BoxDecoration(
@@ -402,12 +440,11 @@ class _CameraScreenState extends State<CameraScreen> {
                                       ? showingColors[i]
                                       : Colors.transparent,
                                   shape: BoxShape.circle,
-                                  border:
-                                      Border.all(color: Colors.white, width: 2),
+                                  border: Border.all(
+                                      color: Colors.white, width: 2),
                                   boxShadow: [
                                     BoxShadow(
-                                      color:
-                                          Colors.black.withOpacity(0.35),
+                                      color: Colors.black.withOpacity(0.35),
                                       blurRadius: 6,
                                     )
                                   ],
