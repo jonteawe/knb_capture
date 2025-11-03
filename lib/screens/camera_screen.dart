@@ -188,21 +188,9 @@ class _CameraScreenState extends State<CameraScreen> {
     }
 
     _applyRepulsionAndClamp(newPositions);
-
     _positions = newPositions;
     _colors = newColors;
     if (mounted) setState(() {});
-
-    final avgDelta = totalDelta / _colors.length.clamp(1, 999);
-    if (avgDelta < kAvgColorDeltaThresh && _gyroMotion < kGyroStillThresh) {
-      _stillTimer += 0.1;
-      if (_stillTimer >= kStillSecondsNeeded) {
-        _autoPause = true;
-        _stillTimer = 0;
-      }
-    } else {
-      _stillTimer = 0;
-    }
   }
 
   void _applyRepulsionAndClamp(List<Offset> pos) {
@@ -211,11 +199,9 @@ class _CameraScreenState extends State<CameraScreen> {
         for (int j = i + 1; j < pos.length; j++) {
           final p1 = pos[i];
           final p2 = pos[j];
-
           final size = MediaQuery.of(context).size;
           final wPx = size.width;
           final hPx = size.height * kCameraFrac;
-
           final dx = (p2.dx - p1.dx) * wPx;
           final dy = (p2.dy - p1.dy) * hPx;
           final dist = sqrt(dx * dx + dy * dy);
@@ -234,13 +220,6 @@ class _CameraScreenState extends State<CameraScreen> {
           }
         }
       }
-    }
-
-    for (int i = 0; i < pos.length; i++) {
-      pos[i] = Offset(
-        pos[i].dx.clamp(0.05, 0.95),
-        pos[i].dy.clamp(kPaletteBarFrac + 0.02, kPaletteBarFrac + kCameraFrac - 0.02),
-      );
     }
   }
 
@@ -318,24 +297,33 @@ class _CameraScreenState extends State<CameraScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: const [
-                    Text(
-                      'Knb Capture',
-                      style: TextStyle(color: Colors.white, fontSize: 22),
-                    ),
-                    Text(
-                      'Användarmeny',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
+                    Text('Knb Capture',
+                        style: TextStyle(color: Colors.white, fontSize: 22)),
+                    Text('Användarmeny',
+                        style: TextStyle(color: Colors.white70, fontSize: 14)),
                   ],
                 ),
               ),
               ListTile(
-                leading: const Icon(Icons.logout, color: Colors.white),
-                title: const Text('Logga ut', style: TextStyle(color: Colors.white)),
+                leading: const Icon(Icons.switch_account, color: Colors.white),
+                title: const Text('Byt konto',
+                    style: TextStyle(color: Colors.white)),
                 onTap: () async {
                   await FirebaseAuth.instance.signOut();
                   if (mounted) {
-                    Navigator.of(context).pushReplacementNamed('/'); // Går tillbaka till AuthScreen
+                    Navigator.of(context).pushReplacementNamed('/');
+                  }
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.logout, color: Colors.white),
+                title: const Text('Logga ut',
+                    style: TextStyle(color: Colors.white)),
+                onTap: () async {
+                  await FirebaseAuth.instance.signOut();
+                  if (mounted) {
+                    Navigator.of(context).pop();
+                    debugPrint("Användare utloggad");
                   }
                 },
               ),
@@ -355,7 +343,15 @@ class _CameraScreenState extends State<CameraScreen> {
                   if (_isCaptured && _capturedImage != null)
                     CustomPaint(painter: ImagePainter(_capturedImage!))
                   else if (_isInitialized)
-                    CameraPreview(_controller!)
+                    // 🔹 Korrigerad kamera-visning (ej stretchad)
+                    FittedBox(
+                      fit: BoxFit.cover,
+                      child: SizedBox(
+                        width: _controller!.value.previewSize!.height,
+                        height: _controller!.value.previewSize!.width,
+                        child: CameraPreview(_controller!),
+                      ),
+                    )
                   else
                     const Center(
                       child: CircularProgressIndicator(color: Colors.white),
