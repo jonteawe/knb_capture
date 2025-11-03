@@ -10,6 +10,7 @@ class ColorSaveService {
     List<Color> colors,
   ) async {
     try {
+      debugPrint('🟢 Startar sparning till Firestore...');
       if (colors.isEmpty) {
         debugPrint('⚠️ Inga färger att spara.');
         return;
@@ -18,16 +19,18 @@ class ColorSaveService {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
         debugPrint('❌ Ingen användare inloggad.');
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ingen användare inloggad!')),
+          );
+        }
         return;
       }
 
       final firestore = FirebaseFirestore.instance;
       final timestamp = DateTime.now().toIso8601String();
-
-      // 🔹 Konvertera Color-listan till RGB-listor
       final rgbList = colors.map((c) => [c.red, c.green, c.blue]).toList();
 
-      // 🔹 Skapa JSON-struktur i samma format som du visade
       final jsonData = {
         "LatestColors": rgbList,
         "Collections": {
@@ -40,25 +43,26 @@ class ColorSaveService {
         }
       };
 
-      // 🔹 Spara till Firestore under användarens UID
+      debugPrint('📦 JSON-data redo: ${jsonEncode(jsonData)}');
+
       await firestore
           .collection('users')
           .doc(user.uid)
           .collection('palettes')
           .add(jsonData);
 
-      debugPrint('✅ Färgpalett sparad till Firestore!');
-
+      debugPrint('✅ Färgpalett sparad till Firestore för ${user.uid}');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Färgpalett sparad till Firestore!')),
         );
       }
-    } catch (e) {
+    } catch (e, st) {
       debugPrint('❌ Fel vid uppladdning till Firestore: $e');
+      debugPrint('Stacktrace: $st');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Fel vid uppladdning till Firestore')),
+          SnackBar(content: Text('Fel vid uppladdning: $e')),
         );
       }
     }
