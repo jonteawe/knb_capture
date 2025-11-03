@@ -5,7 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // 🔹 för logout
+import 'package:firebase_auth/firebase_auth.dart'; // 🔹 lagt till för logout
 
 import '../services/camera_service.dart';
 import '../services/sensor_service.dart';
@@ -90,6 +90,7 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  // 🔦 Flash toggle
   Future<void> _toggleFlash() async {
     if (_controller == null) return;
 
@@ -147,7 +148,7 @@ class _CameraScreenState extends State<CameraScreen> {
       Color bestC = _colors[i];
 
       for (int dx = -kSearchSize; dx <= kSearchSize; dx += kScoreStep.toInt()) {
-        for (int dy = -kSearch; dy <= kSearchSize; dy += kScoreStep.toInt()) {
+        for (int dy = -kSearchSize; dy <= kSearchSize; dy += kScoreStep.toInt()) {
           final nx = (cx + dx).clamp(minX, maxX);
           final ny = (cy + dy).clamp(minY, maxY);
           final idx = (ny * width + nx) * 4;
@@ -187,9 +188,21 @@ class _CameraScreenState extends State<CameraScreen> {
     }
 
     _applyRepulsionAndClamp(newPositions);
+
     _positions = newPositions;
     _colors = newColors;
     if (mounted) setState(() {});
+
+    final avgDelta = totalDelta / _colors.length.clamp(1, 999);
+    if (avgDelta < kAvgColorDeltaThresh && _gyroMotion < kGyroStillThresh) {
+      _stillTimer += 0.1;
+      if (_stillTimer >= kStillSecondsNeeded) {
+        _autoPause = true;
+        _stillTimer = 0;
+      }
+    } else {
+      _stillTimer = 0;
+    }
   }
 
   void _applyRepulsionAndClamp(List<Offset> pos) {
@@ -198,9 +211,11 @@ class _CameraScreenState extends State<CameraScreen> {
         for (int j = i + 1; j < pos.length; j++) {
           final p1 = pos[i];
           final p2 = pos[j];
+
           final size = MediaQuery.of(context).size;
           final wPx = size.width;
           final hPx = size.height * kCameraFrac;
+
           final dx = (p2.dx - p1.dx) * wPx;
           final dy = (p2.dy - p1.dy) * hPx;
           final dist = sqrt(dx * dx + dy * dy);
@@ -219,6 +234,13 @@ class _CameraScreenState extends State<CameraScreen> {
           }
         }
       }
+    }
+
+    for (int i = 0; i < pos.length; i++) {
+      pos[i] = Offset(
+        pos[i].dx.clamp(0.05, 0.95),
+        pos[i].dy.clamp(kPaletteBarFrac + 0.02, kPaletteBarFrac + kCameraFrac - 0.02),
+      );
     }
   }
 
@@ -271,7 +293,7 @@ class _CameraScreenState extends State<CameraScreen> {
       child: Scaffold(
         backgroundColor: Colors.black,
 
-        // 🔹 Hamburgermenyn
+        // 🔹 Hamburgermenyn här
         appBar: AppBar(
           title: const Text('Knb Capture'),
           backgroundColor: Colors.black,
@@ -284,7 +306,7 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ),
 
-        // 🔹 Meny med två val
+        // 🔹 Själva menyn
         drawer: Drawer(
           backgroundColor: Colors.grey[900],
           child: ListView(
@@ -296,33 +318,24 @@ class _CameraScreenState extends State<CameraScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: const [
-                    Text('Knb Capture',
-                        style: TextStyle(color: Colors.white, fontSize: 22)),
-                    Text('Användarmeny',
-                        style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    Text(
+                      'Knb Capture',
+                      style: TextStyle(color: Colors.white, fontSize: 22),
+                    ),
+                    Text(
+                      'Användarmeny',
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
                   ],
                 ),
               ),
               ListTile(
-                leading: const Icon(Icons.switch_account, color: Colors.white),
-                title: const Text('Byt konto',
-                    style: TextStyle(color: Colors.white)),
-                onTap: () async {
-                  await FirebaseAuth.instance.signOut();
-                  if (mounted) {
-                    Navigator.of(context).pushReplacementNamed('/');
-                  }
-                },
-              ),
-              ListTile(
                 leading: const Icon(Icons.logout, color: Colors.white),
-                title: const Text('Logga ut',
-                    style: TextStyle(color: Colors.white)),
+                title: const Text('Logga ut', style: TextStyle(color: Colors.white)),
                 onTap: () async {
                   await FirebaseAuth.instance.signOut();
                   if (mounted) {
-                    Navigator.of(context).pop(); // stäng meny
-                    debugPrint("Användare utloggad");
+                    Navigator.of(context).pushReplacementNamed('/'); // Går tillbaka till AuthScreen
                   }
                 },
               ),
@@ -330,7 +343,7 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ),
 
-        // 🔹 Kameravy
+        // 🔹 Resten av kameravyn
         body: Column(
           children: [
             PaletteBar(colors: showingColors),
@@ -345,8 +358,46 @@ class _CameraScreenState extends State<CameraScreen> {
                     CameraPreview(_controller!)
                   else
                     const Center(
-                        child:
-                            CircularProgressIndicator(color: Colors.white)),
+                      child: CircularProgressIndicator(color: Colors.white),
+                    ),
+                  if (_isInitialized || _isCaptured)
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final w = constraints.maxWidth;
+                        final h = constraints.maxHeight;
+                        return Stack(
+                          children: List.generate(showingPositions.length, (i) {
+                            final pos = showingPositions[i];
+                            final nx = pos.dx;
+                            final ny = (pos.dy - kPaletteBarFrac) / kCameraFrac;
+                            final dx = nx * w;
+                            final dy = ny * h;
+                            return Positioned(
+                              left: dx - kProbeDiameter / 2,
+                              top: dy - kProbeDiameter / 2,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 20),
+                                width: kProbeDiameter,
+                                height: kProbeDiameter,
+                                decoration: BoxDecoration(
+                                  color: showingColors.isNotEmpty
+                                      ? showingColors[i]
+                                      : Colors.transparent,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white, width: 2),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.35),
+                                      blurRadius: 6,
+                                    )
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                        );
+                      },
+                    ),
                 ],
               ),
             ),
