@@ -95,7 +95,8 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_controller == null) return;
 
     setState(() {
-      _flashMode = _flashMode == FlashMode.off ? FlashMode.torch : FlashMode.off;
+      _flashMode =
+          _flashMode == FlashMode.off ? FlashMode.torch : FlashMode.off;
     });
 
     try {
@@ -117,25 +118,27 @@ class _CameraScreenState extends State<CameraScreen> {
     final brightness = (r + g + b) / 3.0;
     final contrast = (max(r, max(g, b)) - min(r, min(g, b))).toDouble();
     final saturation = contrast / (brightness + 1);
-    return (contrast * 1.3 + saturation * 100 + (255 - (brightness - 128).abs())) / 510.0;
+    return (contrast * 1.3 +
+            saturation * 100 +
+            (255 - (brightness - 128).abs())) /
+        510.0;
   }
 
   void _processFrame(CameraImage image) {
     if (_manualPause || _autoPause || _isCaptured) return;
-    if (!Platform.isIOS || image.format.group != ImageFormatGroup.bgra8888) return;
+    if (!Platform.isIOS || image.format.group != ImageFormatGroup.bgra8888)
+      return;
 
     final bytes = image.planes.first.bytes;
     final width = image.width;
     final height = image.height;
 
-    // --- ✅ Begränsa skanningsområdet till synlig kamerazony ---
-    // (dvs mellan palettbaren och bottombaren)
-    const visibleTopFrac = kPaletteBarFrac;
-    const visibleHeightFrac = kCameraFrac;
+    // ✅ Begränsa skanning till synlig del (inte bakom UI-paneler)
+    final visibleTop = (height * kPaletteBarFrac).toInt();
+    final visibleBottom = (height * (1 - kBottomUIFrac)).toInt();
 
-    final minY = (height * visibleTopFrac).toInt();
-    final maxY = (height * (visibleTopFrac + visibleHeightFrac)).toInt();
-
+    final minY = visibleTop;
+    final maxY = visibleBottom;
     final minX = (width * 0.05).toInt();
     final maxX = (width * 0.95).toInt();
 
@@ -146,21 +149,19 @@ class _CameraScreenState extends State<CameraScreen> {
     for (int i = 0; i < _positions.length; i++) {
       final pos = _positions[i];
 
-      // X: vanlig skala 0..1 -> 0..width
       int cx = (pos.dx * width).toInt().clamp(minX, maxX);
-
-      // Y: mappa 0..1 (globala normaliserade) till endast synliga mittzonen
-      // pos.dy ligger 0..1 där den synliga zonen är [visibleTopFrac .. visibleTopFrac+visibleHeightFrac]
-      final ny01 = ((pos.dy - visibleTopFrac) / visibleHeightFrac)
-          .clamp(0.0, 1.0);
-      int cy = (ny01 * height).toInt().clamp(minY, maxY);
+      int cy = (pos.dy * height).toInt().clamp(minY, maxY);
 
       double bestScore = -1e9;
       int bestX = cx, bestY = cy;
       Color bestC = _colors[i];
 
-      for (int dx = -kSearchSize; dx <= kSearchSize; dx += kScoreStep.toInt()) {
-        for (int dy = -kSearchSize; dy <= kSearchSize; dy += kScoreStep.toInt()) {
+      for (int dx = -kSearchSize;
+          dx <= kSearchSize;
+          dx += kScoreStep.toInt()) {
+        for (int dy = -kSearchSize;
+            dy <= kSearchSize;
+            dy += kScoreStep.toInt()) {
           final nx = (cx + dx).clamp(minX, maxX);
           final ny = (cy + dy).clamp(minY, maxY);
           final idx = (ny * width + nx) * 4;
@@ -284,7 +285,6 @@ class _CameraScreenState extends State<CameraScreen> {
       child: Scaffold(
         backgroundColor: Colors.black,
 
-        // 🔹 Hamburgermenyn här
         appBar: AppBar(
           title: const Text('Knb Capture'),
           backgroundColor: Colors.black,
@@ -297,7 +297,6 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ),
 
-        // 🔹 Själva menyn
         drawer: Drawer(
           backgroundColor: Colors.grey[900],
           child: ListView(
@@ -343,7 +342,6 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ),
 
-        // 🔹 Resten av kameravyn
         body: Column(
           children: [
             PaletteBar(colors: showingColors),
@@ -351,7 +349,6 @@ class _CameraScreenState extends State<CameraScreen> {
               flex: (kCameraFrac * 1000).round(),
               child: Stack(
                 children: [
-                  // 🔹 Kamerabilden – croppad, centrerad
                   if (_isCaptured && _capturedImage != null)
                     CustomPaint(painter: ImagePainter(_capturedImage!))
                   else if (_isInitialized)
@@ -359,23 +356,16 @@ class _CameraScreenState extends State<CameraScreen> {
                       builder: (context, constraints) {
                         final containerW = constraints.maxWidth;
                         final containerH = constraints.maxHeight;
-
-                        // previewSize är landscape på iOS
                         final preview = _controller!.value.previewSize!;
                         final previewAspect =
-                            preview.height / preview.width; // Portrait ratio
+                            preview.height / preview.width;
                         final containerAspect =
                             containerH > 0 ? containerW / containerH : 1.0;
-
-                        // BoxFit.cover – skala uniformt från mitten så att bilden täcker helt
                         double scale = previewAspect / containerAspect;
                         if (scale < 1) scale = 1 / scale;
-
-                        // UI-zoner för mask (visuellt)
                         final screenH = MediaQuery.of(context).size.height;
                         final topCut = screenH * kPaletteBarFrac;
                         final bottomCut = screenH * kBottomUIFrac;
-
                         return Stack(
                           children: [
                             ClipRect(
@@ -412,8 +402,6 @@ class _CameraScreenState extends State<CameraScreen> {
                     const Center(
                       child: CircularProgressIndicator(color: Colors.white),
                     ),
-
-                  // 🔹 Prober och overlays ovanpå kameran
                   if (_isInitialized || _isCaptured)
                     LayoutBuilder(
                       builder: (context, constraints) {
@@ -440,11 +428,12 @@ class _CameraScreenState extends State<CameraScreen> {
                                       ? showingColors[i]
                                       : Colors.transparent,
                                   shape: BoxShape.circle,
-                                  border: Border.all(
-                                      color: Colors.white, width: 2),
+                                  border:
+                                      Border.all(color: Colors.white, width: 2),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withOpacity(0.35),
+                                      color:
+                                          Colors.black.withOpacity(0.35),
                                       blurRadius: 6,
                                     )
                                   ],
