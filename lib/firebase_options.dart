@@ -46,7 +46,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '35962282921',
     projectId: 'knbcapturecloud',
     authDomain: 'knbcapturecloud.firebaseapp.com',
-    storageBucket: 'knbcapturecloud.firebasestorage.app',
+    storageBucket: 'knbcapturecloud.appspot.com',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
@@ -54,7 +54,7 @@ class DefaultFirebaseOptions {
     appId: '1:35962282921:android:67b038ed74d4245a669ab8',
     messagingSenderId: '35962282921',
     projectId: 'knbcapturecloud',
-    storageBucket: 'knbcapturecloud.firebasestorage.app',
+    storageBucket: 'knbcapturecloud.appspot.com',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
@@ -62,7 +62,7 @@ class DefaultFirebaseOptions {
     appId: '1:35962282921:ios:a3ce04b988534c08669ab8',
     messagingSenderId: '35962282921',
     projectId: 'knbcapturecloud',
-    storageBucket: 'knbcapturecloud.firebasestorage.app',
+    storageBucket: 'knbcapturecloud.appspot.com',
     iosBundleId: 'com.example.knbCapture',
   );
 
@@ -71,7 +71,7 @@ class DefaultFirebaseOptions {
     appId: '1:35962282921:ios:a3ce04b988534c08669ab8',
     messagingSenderId: '35962282921',
     projectId: 'knbcapturecloud',
-    storageBucket: 'knbcapturecloud.firebasestorage.app',
+    storageBucket: 'knbcapturecloud.appspot.com',
     iosBundleId: 'com.example.knbCapture',
   );
 
@@ -81,6 +81,6 @@ class DefaultFirebaseOptions {
     messagingSenderId: '35962282921',
     projectId: 'knbcapturecloud',
     authDomain: 'knbcapturecloud.firebaseapp.com',
-    storageBucket: 'knbcapturecloud.firebasestorage.app',
+    storageBucket: 'knbcapturecloud.appspot.com',
   );
 }
